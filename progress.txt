@@ -1,3 +1,4 @@
 # Child Indoor Localization System â€” Session Log
 # Format: DONE [TASK-ID] (owner): <description> â€” <timestamp>
 # Append only. Never edit existing lines.
+DONE [TASK-01] (shared): Full scaffold — all dirs, placeholders, configs, rules, and docs committed and pushed — 2026-02-28T02:45:00Z
