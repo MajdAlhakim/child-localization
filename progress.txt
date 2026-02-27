@@ -1,0 +1,3 @@
+# Child Indoor Localization System — Session Log
+# Format: DONE [TASK-ID] (owner): <description> — <timestamp>
+# Append only. Never edit existing lines.
