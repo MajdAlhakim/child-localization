@@ -12,20 +12,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   backend:
     build: ./backend
     ports:
       - "8000:8000"
-    environment:
-      DATABASE_URL: postgresql+asyncpg://admin:changeme@db:5432/localization
-      SECRET_KEY: dev-secret-key-change-in-production
-      GATEWAY_API_KEY: dev-gateway-key-change-in-production
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - ./backend/app:/app/app
+    restart: unless-stopped
 
 volumes:
   postgres_data:
