@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: child-localization-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # set manually in Render dashboard
+      - key: SECRET_KEY
+        sync: false
+      - key: GATEWAY_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
+    healthCheckPath: /api/v1/health
+    autoDeploy: true
