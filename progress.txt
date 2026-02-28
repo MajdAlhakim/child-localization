@@ -3,3 +3,7 @@
 # Append only. Never edit existing lines.
 DONE [TASK-01] (shared): Full scaffold — all dirs, placeholders, configs, rules, and docs committed and pushed — 2026-02-28T02:45:00Z
 DONE [TASK-02] (person-a): requirements.txt and Dockerfile created; docker compose build exits 0 — 2026-02-28T03:14:00Z
+DONE [TASK-03] (person-a): 7 SQLAlchemy ORM tables; SQLite in-memory tests; 14 tests pass — 2026-02-28T03:39:00Z
+DONE [TASK-04] (person-a): pydantic-settings config, JWT via python-jose, bcrypt passwords; 11 tests pass — 2026-02-28T03:39:00Z
+DONE [TASK-07] (person-a): correct(d_raw, offset)=max(d_raw-offset,0.5); 7 tests pass — 2026-02-28T03:39:00Z
+DONE [TASK-08] (person-a): JWT-protected CRUD ap_calibration, is_reliable gate; 8 tests pass — 2026-02-28T03:39:00Z
