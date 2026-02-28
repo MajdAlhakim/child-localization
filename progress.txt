@@ -2,3 +2,4 @@
 # Format: DONE [TASK-ID] (owner): <description> â€” <timestamp>
 # Append only. Never edit existing lines.
 DONE [TASK-01] (shared): Full scaffold — all dirs, placeholders, configs, rules, and docs committed and pushed — 2026-02-28T02:45:00Z
+DONE [TASK-02] (person-a): requirements.txt and Dockerfile created; docker compose build exits 0 — 2026-02-28T03:14:00Z
