@@ -10,9 +10,9 @@ A BW16 wearable device streams IMU and Wi-Fi RTT data over BLE → AP gateway �
 | Component | Platform | URL / Details |
 |---|---|---|
 | **Database** | Supabase (PostgreSQL 16) | `krfmibtoeffqlumhthyv.supabase.co` — Singapore region |
-| **API Server** | Render.com | _Set after first Render deploy — see setup below_ |
+| **API Server** | Fly.io | `https://child-localization-api.fly.dev` _(live after first deploy)_ |
 
-> The server is cloud-hosted with a public IP. The university APs POST BLE data directly to the Render URL over HTTPS. No university LAN access is required.
+> The server is cloud-hosted with a public IP and **always-on** (no spin-down). University APs POST BLE data directly over HTTPS — no university LAN access required.
 
 ---
 
@@ -25,7 +25,7 @@ BW16 Device (IMU + RTT)
    QU Access Point
         │ HTTPS POST (X-API-Key)
         ▼
-  Render.com — FastAPI Server (cloud, public IP)
+  Fly.io — FastAPI Server (Singapore, always-on)
   ┌─────────────────────────────────────────┐
   │  EKF (4-state) + Bayesian Grid Fusion   │
   │  0.5 m × 0.5 m grid cells              │
@@ -56,7 +56,8 @@ child-localization/
 ├── app/
 │   └── lib/              # Flutter app (screens, services, models)
 ├── tests/                # pytest test suite (all agents)
-├── render.yaml           # Render one-click deploy config
+├── fly.toml              # Fly.io deploy config (always-on, Singapore)
+├── .github/workflows/    # GitHub Actions — auto-deploy to Fly.io on push
 ├── docker-compose.yml    # Local development only
 ├── .env                  # Local dev secrets (not committed)
 ├── PRD.md                # Full product requirements document
@@ -66,30 +67,49 @@ child-localization/
 
 ---
 
-## Render Deployment (FastAPI Server)
+## Fly.io Deployment (FastAPI Server)
 
-### First-time setup
+### First-time setup (run once)
 
-1. Go to [render.com](https://render.com) → **New → Blueprint**
-2. Connect your GitHub repo (`MajdAlhakim/child-localization`)
-3. Render detects `render.yaml` automatically
-4. In Render dashboard → **Environment**, add these secrets:
+```bash
+# 1. Install flyctl
+curl -L https://fly.io/install.sh | sh      # macOS/Linux
+# Windows: https://fly.io/install.ps1
 
-| Key | Value |
-|---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://postgres.krfmibtoeffqlumhthyv:[DB-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres` |
-| `SECRET_KEY` | _(generate a strong random string)_ |
-| `GATEWAY_API_KEY` | _(shared secret with the AP gateway team)_ |
-| `ALLOWED_ORIGINS` | `*` or your Flutter app origin |
+# 2. Sign up / log in
+fly auth signup     # or: fly auth login
 
-1. Click **Deploy** — Render builds the Docker image and starts the server
-2. Health check: `GET https://child-localization.onrender.com/api/v1/health`
+# 3. Create the app (uses fly.toml config)
+fly apps create child-localization-api
 
-> **Supabase DB password:** Supabase dashboard → Project Settings → Database → Connection string section
+# 4. Set production secrets
+fly secrets set \
+  DATABASE_URL="postgresql+asyncpg://postgres.krfmibtoeffqlumhthyv:[DB-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" \
+  SECRET_KEY="<strong-random-string>" \
+  GATEWAY_API_KEY="<shared-secret-with-ap-team>" \
+  ALLOWED_ORIGINS="*"
 
-### Auto-deploy
+# 5. Deploy
+fly deploy
+```
 
-Every `git push` to `main` triggers a Render redeploy automatically (`autoDeploy: true` in `render.yaml`).
+> **Supabase DB password:** Supabase dashboard → Project Settings → Database → Connection string
+
+### Health check
+
+```
+GET https://child-localization-api.fly.dev/api/v1/health
+```
+
+### Auto-deploy on push
+
+Add `FLY_API_TOKEN` to your GitHub repo secrets (Settings → Secrets → Actions):
+
+```bash
+fly tokens create deploy -x 999999h   # generate token
+```
+
+Then every `git push` to `main` auto-deploys via `.github/workflows/fly-deploy.yml`.
 
 ---
 
@@ -150,7 +170,7 @@ See `tasks.json` for live status.
 | Database | PostgreSQL 16 on Supabase (asyncpg + SQLAlchemy 2.0 async) |
 | Auth | JWT (python-jose) for parents; X-API-Key for AP gateways |
 | Mobile | Flutter (Android 12 primary) |
-| Server | Render.com (Docker, auto-deploy from GitHub) |
+| Server | Fly.io (Docker, always-on, Singapore, auto-deploy via GitHub Actions) |
 
 ---
 
