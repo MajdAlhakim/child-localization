@@ -9,10 +9,10 @@ A BW16 wearable device streams IMU and Wi-Fi RTT data over BLE → AP gateway �
 
 | Component | Platform | URL / Details |
 |---|---|---|
-| **Database** | Supabase (PostgreSQL 16) | `krfmibtoeffqlumhthyv.supabase.co` — Singapore region |
-| **API Server** | Fly.io | `https://child-localization-api.fly.dev` _(live after first deploy)_ |
+| **Database** | PostgreSQL 16 (Docker on VM) | Local to GCP VM — accessed via `db:5432` |
+| **API Server** | GCP e2-micro VM — Ubuntu 22.04 | `http://35.238.189.188:8000` ✅ **LIVE** |
 
-> The server is cloud-hosted with a public IP and **always-on** (no spin-down). University APs POST BLE data directly over HTTPS — no university LAN access required.
+> The server is cloud-hosted on a GCP VM with a static public IP and **always-on** (systemd auto-restart). University APs POST BLE data directly over HTTP — no university LAN required.
 
 ---
 
@@ -23,17 +23,16 @@ BW16 Device (IMU + RTT)
         │ BLE
         ▼
    QU Access Point
-        │ HTTPS POST (X-API-Key)
+        │ HTTP POST  X-API-Key: <GATEWAY_API_KEY>
         ▼
-  Fly.io — FastAPI Server (Singapore, always-on)
+  GCP e2-micro VM — 35.238.189.188:8000
   ┌─────────────────────────────────────────┐
-  │  EKF (4-state) + Bayesian Grid Fusion   │
-  │  0.5 m × 0.5 m grid cells              │
+  │  FastAPI + EKF + Bayesian Grid Fusion   │
+  │  Docker Compose  systemd auto-restart   │
   └─────────────────────────────────────────┘
-        │ asyncpg (SSL)       │ WebSocket
+        │ asyncpg             │ WebSocket
         ▼                     ▼
-  Supabase PostgreSQL 16   Flutter Parent App (Android 12)
-  (Singapore, ap-southeast-1)
+  PostgreSQL 16 (local)   Flutter Parent App (Android 12)
 ```
 
 ---
@@ -56,9 +55,9 @@ child-localization/
 ├── app/
 │   └── lib/              # Flutter app (screens, services, models)
 ├── tests/                # pytest test suite (all agents)
-├── fly.toml              # Fly.io deploy config (always-on, Singapore)
-├── .github/workflows/    # GitHub Actions — auto-deploy to Fly.io on push
-├── docker-compose.yml    # Local development only
+├── fly.toml              # Fly.io config (unused — kept for reference)
+├── .github/workflows/    # GitHub Actions
+├── docker-compose.yml    # Docker Compose (production + local dev)
 ├── .env                  # Local dev secrets (not committed)
 ├── PRD.md                # Full product requirements document
 ├── tasks.json            # Single source of truth for task progress
@@ -67,49 +66,37 @@ child-localization/
 
 ---
 
-## Fly.io Deployment (FastAPI Server)
+## GCP VM Deployment (Production)
 
-### First-time setup (run once)
+**Server:** `35.238.189.188` — GCP e2-micro, Ubuntu 22.04, us-central1, port 8000
 
-```bash
-# 1. Install flyctl
-curl -L https://fly.io/install.sh | sh      # macOS/Linux
-# Windows: https://fly.io/install.ps1
+### Endpoints (give these to QU IT team)
 
-# 2. Sign up / log in
-fly auth signup     # or: fly auth login
+| Route | Method | Description |
+|---|---|---|
+| `http://35.238.189.188:8000/api/v1/health` | GET | Health check |
+| `http://35.238.189.188:8000/api/v1/gateway/packet` | POST | AP gateway ingestion |
+| `ws://35.238.189.188:8000/ws/{device_id}` | WebSocket | Live position stream |
 
-# 3. Create the app (uses fly.toml config)
-fly apps create child-localization-api
-
-# 4. Set production secrets
-fly secrets set \
-  DATABASE_URL="postgresql+asyncpg://postgres.krfmibtoeffqlumhthyv:[DB-PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres" \
-  SECRET_KEY="<strong-random-string>" \
-  GATEWAY_API_KEY="<shared-secret-with-ap-team>" \
-  ALLOWED_ORIGINS="*"
-
-# 5. Deploy
-fly deploy
-```
-
-> **Supabase DB password:** Supabase dashboard → Project Settings → Database → Connection string
-
-### Health check
-
-```
-GET https://child-localization-api.fly.dev/api/v1/health
-```
-
-### Auto-deploy on push
-
-Add `FLY_API_TOKEN` to your GitHub repo secrets (Settings → Secrets → Actions):
+### Update server after any git push
 
 ```bash
-fly tokens create deploy -x 999999h   # generate token
+# In GCP browser SSH
+cd ~/child-localization
+git pull origin main
+sudo docker compose up -d --build
 ```
 
-Then every `git push` to `main` auto-deploys via `.github/workflows/fly-deploy.yml`.
+### Check status
+
+```bash
+sudo docker compose ps
+sudo docker compose logs backend --tail=50
+```
+
+### Auto-restart
+
+Configured via systemd — stack restarts automatically on VM reboot.
 
 ---
 
@@ -118,18 +105,18 @@ Then every `git push` to `main` auto-deploys via `.github/workflows/fly-deploy.y
 ```bash
 git clone https://github.com/MajdAlhakim/child-localization.git
 cd child-localization
-# Edit .env — fill in DB password from Supabase dashboard
-docker compose up --build   # uses local postgres (for offline dev only)
+# Edit .env with your local DB credentials
+docker compose up --build
 ```
 
-### Run tests (no Docker, no live DB needed)
+### Run tests (no Docker needed)
 
 ```bash
 python -m pip install -r backend/requirements.txt pytest pytest-asyncio httpx aiosqlite
 python -m pytest tests/ --tb=short -q
 ```
 
-> Tests use SQLite in-memory — fully offline. Supabase is production only.
+> Tests use SQLite in-memory — fully offline.
 
 ---
 
@@ -170,7 +157,7 @@ See `tasks.json` for live status.
 | Database | PostgreSQL 16 on Supabase (asyncpg + SQLAlchemy 2.0 async) |
 | Auth | JWT (python-jose) for parents; X-API-Key for AP gateways |
 | Mobile | Flutter (Android 12 primary) |
-| Server | Fly.io (Docker, always-on, Singapore, auto-deploy via GitHub Actions) |
+| Server | GCP e2-micro VM, 35.238.189.188, Docker Compose, systemd auto-restart |
 
 ---
 
