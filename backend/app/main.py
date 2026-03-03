@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import settings
 from backend.app.db.init_db import init_db
-from backend.app.api import admin, parent, websocket
+from backend.app.api import admin, parent
 
 
 @asynccontextmanager
@@ -31,4 +31,3 @@ app.add_middleware(
 
 app.include_router(admin.router)
 app.include_router(parent.router)
-app.include_router(websocket.router)
