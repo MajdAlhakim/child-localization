@@ -56,18 +56,27 @@ def _build_bin_edges() -> np.ndarray:
     """
     Construct 20-bin acceleration histogram edges.
 
-    Layout (locked — from MATLAB):
-      E[0] = 0
-      Bins 1..ML : log-spaced below gravity (9.8 m/s²)
-      Bins ML+1..M : linearly spaced above gravity up to AMAX
+    Faithful Python port of the MATLAB loop:
+        for i = 2:M+1
+            if i <= Ml+1   → E(i) = 9.8 * (0.5*Kbin)^((Ml+1-i)/Ml)
+            else           → E(i) = 9.8 + (amax-9.8)*(i-Ml-1)/Mh
+
+    Converting MATLAB 1-indexed i to Python 0-indexed j = i-1:
+        Below gravity  (j = 1..ML):   E[j] = 9.8 * (0.5*KBIN)^((ML-j)/ML)
+        Above gravity  (j = ML+1..M): E[j] = 9.8 + (AMAX-9.8)*(j-ML)/MH
+
+    This ensures:
+        E[0]  = 0       (left boundary)
+        E[ML] = 9.8     (gravity boundary, last below-gravity edge)
+        E[M]  = AMAX    (right boundary = 20.0 m/s²)
     """
     E = np.zeros(M + 1)
     # E[0] = 0  (already set)
     for i in range(1, M + 1):
         if i <= ML:
-            E[i] = 9.8 * (0.5 * KBIN) ** ((ML + 1 - i) / ML)
+            E[i] = 9.8 * (0.5 * KBIN) ** ((ML - i) / ML)
         else:
-            E[i] = 9.8 + (AMAX - 9.8) * (i - ML - 1) / MH
+            E[i] = 9.8 + (AMAX - 9.8) * (i - ML) / MH
     return E
 
 

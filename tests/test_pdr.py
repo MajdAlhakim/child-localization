@@ -91,29 +91,30 @@ class TestHistogramBinEdges:
     def test_first_edge_zero(self):
         assert BIN_EDGES[0] == pytest.approx(0.0)
 
-    def test_last_below_gravity_edge_below_9_8(self):
-        # E[ML] is the last edge in the below-gravity section → < 9.8
-        assert BIN_EDGES[10] < 9.8
+    def test_last_below_gravity_edge_is_9_8(self):
+        # E[ML] = E[10] is the last below-gravity edge.
+        # With the corrected MATLAB-equivalent formula: (ML-i)/ML gives exponent 0
+        # at i=ML=10, so E[10] = 9.8 * (0.0585)^0 = 9.8 exactly.
+        assert BIN_EDGES[10] == pytest.approx(9.8, rel=1e-9)
 
     def test_above_gravity_edges_increase(self):
         edges = BIN_EDGES[11:]
         assert all(edges[i] < edges[i+1] for i in range(len(edges)-1))
 
     def test_last_edge_equals_amax(self):
-        # The formula gives E[M] = 9.8 + (20 - 9.8) * (10 - 1) / 10  (for i = M = 20)
-        from backend.app.fusion.pdr import AMAX, ML, MH
-        i = ML + MH  # = 20
-        expected = 9.8 + (AMAX - 9.8) * (i - ML - 1) / MH
-        assert BIN_EDGES[M] == pytest.approx(expected, rel=1e-9)
+        # E[M] must equal AMAX = 20.0 m/s² (right boundary of histogram)
+        from backend.app.fusion.pdr import AMAX
+        assert BIN_EDGES[M] == pytest.approx(AMAX, rel=1e-9)
 
     def test_edges_strictly_positive_except_first(self):
         assert all(e > 0 for e in BIN_EDGES[1:])
 
     def test_below_gravity_log_spaced(self):
-        # Below-gravity edges should be computed with the locked formula
+        # Verify each below-gravity edge matches the corrected MATLAB formula j=(i-1):
+        # Python E[i] = 9.8 * (0.5*KBIN)^((ML-i)/ML)  for i=1..ML
         from backend.app.fusion.pdr import KBIN, ML
         for i in range(1, ML + 1):
-            expected = 9.8 * (0.5 * KBIN) ** ((ML + 1 - i) / ML)
+            expected = 9.8 * (0.5 * KBIN) ** ((ML - i) / ML)
             assert BIN_EDGES[i] == pytest.approx(expected, rel=1e-9)
 
     def test_rebuild_matches_module_constant(self):
