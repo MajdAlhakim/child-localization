@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core.security import create_access_token, verify_password, verify_token
+from backend.app.core.security import create_access_token, verify_password, verify_token, get_password_hash
 from backend.app.db.models import Device, ParentUser, PositionEstimate
 from backend.app.db.session import get_db
 
@@ -52,6 +52,32 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
     user = result.scalars().first()
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token({"sub": str(user.user_id)})
+    return TokenResponse(access_token=token)
+
+
+# ── Register ───────────────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/auth/register", response_model=TokenResponse, status_code=201)
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    # Reject duplicate emails
+    existing = await db.execute(select(ParentUser).where(ParentUser.email == body.email))
+    if existing.scalars().first() is not None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    user = ParentUser(
+        email=body.email,
+        hashed_password=get_password_hash(body.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
     token = create_access_token({"sub": str(user.user_id)})
     return TokenResponse(access_token=token)
 
