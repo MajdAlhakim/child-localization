@@ -16,6 +16,7 @@ DONE [TASK-12] (person-c): ekf.py 4-state KF predict/update, locked P0/Q/R, dive
 DONE [TASK-12B] (person-c): pdr.py full MATLAB port - EMA, gyro bias, step detection, Weinberg+SVR hybrid, histogram, retrain; 39 tests pass — 2026-03-04T00:14:00Z
 DONE [TASK-13] (person-c): coordinator.py async on_imu/on_rtt, ZUPT, EKF divergence reset, mode logic, publish_position stub+set_publisher; 23 tests pass — 2026-03-04T00:14:00Z
 DONE [DOCS] (shared): CLAUDE.md created at repo root — workspace rules for Claude Code auto-loading; consolidates session protocol, task ownership, locked architecture, math constants, API contracts, performance requirements; architecture table updated for direct Wi-Fi path — 2026-03-04T00:00:00Z
+DONE [DOCS] (shared): unified firmware sketch update — all docs updated to reflect that BW16 firmware is a single sketch (firmware/bw16/main/main.ino); removed references to separate imu_reader.ino, rtt_ranger.ino, wifi_transmitter.ino; updated PRD.md §16.4, CLAUDE.md task ownership + firmware note, tasks.json TASK-05B/05C notes + test commands, .agent/rules/child-localization.md architecture + API contract + OQ-02 closed, .agent/knowledge/child-localization-core.md duplicate Artifact 6 removed + person-b task list updated — 2026-03-04T12:00:00Z
 
 ================================================================================
 CHILD INDOOR LOCALIZATION SYSTEM — PROJECT PROGRESS LOG
