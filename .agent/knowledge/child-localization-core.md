@@ -1,4 +1,5 @@
 # Knowledge Item: Child Indoor Localization System — Core Context
+
 **ID:** KI-2026-001
 **File:** `.agent/knowledge/child-localization-core.md`
 **Created:** 2026-02-27
@@ -24,7 +25,7 @@ failure modes, and team structure documented here were established during Senior
 
 child localization, indoor localization, BW16, RTT, IMU, EKF, PDR, Bayesian grid,
 observation model, offset calibration, sensor fusion, FastAPI, asyncpg, Flutter,
-WebSocket, BLE gateway, Qatar University, H07, corridor, senior design, tasks.json,
+WebSocket, BLE gateway (Model 2 future work), Qatar University, H07, corridor, senior design, tasks.json,
 TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-05B, TASK-06, TASK-07, TASK-08,
 TASK-09, TASK-10, TASK-11, TASK-12, TASK-12B, TASK-13, TASK-14, TASK-15, TASK-16,
 TASK-17, TASK-18, TASK-19, TASK-20, person-a, person-b, person-c, person-d,
@@ -44,7 +45,7 @@ gyro bias, EMA filter, pedestrian dead reckoning, MATLAB migration
 
 ```
 Type: decision
-Verified: 2026-02-27
+Verified: 2026-03-01
 ```
 
 | Component | Decision | Rationale |
@@ -54,8 +55,11 @@ Verified: 2026-02-27
 | Fusion | EKF, 4-state [px, py, vx, vy] | Computationally efficient; adequate for Gaussian noise model |
 | Backend | FastAPI + asyncpg + SQLAlchemy 2.0 async | Async WebSocket + REST on single process |
 | Mobile | Flutter (Android 12 primary) | Single codebase; sufficient for map rendering |
-| Device→Server | BLE → AP gateway → HTTP POST to cloud VM | BW16 cannot authenticate to university Wi-Fi |
-| Server hosting | Cloud VM with static public IP | Decouples from university network; accessible from anywhere |
+| Primary transport | Direct Wi-Fi — device POSTs IMU + RTT over venue Wi-Fi to server port 443 | GSM, BLE gateway (Model 2 future work) |
+| Server port | 443 via Nginx — port 8000 internal only | Exposing port 8000 |
+| RTT operation | Always active — device ranges against QU APs | Disabling RTT |
+| Deployment | Venue-managed tag — IT registers MAC once | Consumer-owned device |
+| Server hosting | GCP e2-micro, static IP 35.238.189.188 | Free tier; static IP required for IT AP config |
 | Grid cell size | 0.5 m × 0.5 m | Matches Horn 2022 reference implementation |
 | Database | PostgreSQL 16 + asyncpg | |
 
@@ -535,7 +539,7 @@ Status: Unresolved — flag if code touches these areas
 | ID | Question | Impact |
 |---|---|---|
 | OQ-01 | BW16 SDK: per-BSSID one-sided FTM RTT with burst control? | Critical |
-| OQ-02 | QU AP BLE gateway protocol? (HTTP / MQTT / CMX) | Critical |
+| OQ-02 [CLOSED] | QU AP BLE gateway (Model 2 future work) protocol? (HTTP / MQTT / CMX) | Critical |
 | OQ-03 | AP (x, y, z) coordinates confirmed by IT? | High |
 | OQ-04 | AP bandwidth: 40/80 MHz or 20 MHz only? | Medium |
 | OQ-05 | Which QU APs are in DFS 5 GHz band? | Medium |
@@ -545,6 +549,7 @@ Status: Unresolved — flag if code touches these areas
 ## Update Instructions
 
 Update this KI (increment version, update `updated` date) when:
+
 - Calibration offsets collected → update Artifact 4 with real values
 - Any OQ resolved → update Artifact 7, mark resolved
 - A code pattern confirmed working via tests → add `# Tested: [date]` comment
