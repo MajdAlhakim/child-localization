@@ -1,7 +1,7 @@
 {
   "project": "Child Indoor Localization System",
-  "version": "1.0",
-  "description": "Real-time child indoor localization — QU H07 C Corridor senior design project",
+  "version": "2.0",
+  "description": "Real-time child indoor localization — QU H07 C Corridor senior design project — direct Wi-Fi architecture (v4.0): BW16 tag posts IMU+RTT data directly to cloud server over HTTPS on QU-User Wi-Fi",
   "update_protocol": "pull-merge-push — always git pull before modifying this file. Only modify entries where owner == your identity.",
   "tasks": [
     {
@@ -58,40 +58,53 @@
     },
     {
       "id": "TASK-05",
-      "title": "BLE packet parser",
+      "title": "Device packet parser (binary IMU/RTT payload over HTTPS)",
       "phase": 2,
       "phase_name": "Protocol",
       "owner": "person-b",
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "Parses binary IMU (0x01, 40 bytes) and RTT (0x02, variable) packets from base64-decoded HTTPS POST body. BLE gateway path removed — BW16 posts directly to server. Wire format unchanged (see CLAUDE.md §8).",
       "acceptance": "pytest tests/test_ble_parser.py passes",
       "test_command": "pytest tests/test_ble_parser.py --tb=short -q"
     },
     {
       "id": "TASK-05B",
-      "title": "BW16 firmware — IMU reader port to BW16 + MPU6050",
+      "title": "BW16 firmware — IMU reader + RTT ranger (MPU6050 sampling)",
       "phase": 2,
       "phase_name": "Protocol",
       "owner": "person-b",
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
-      "acceptance": "imu_reader.ino compiles for BW16 (Realtek Arduino SDK); serial output matches packet_format.h Type 0x01 byte layout; verified by manual inspection of packed bytes against packet spec",
+      "notes": "imu_reader.ino: MPU6050 at 100 Hz, packs Type 0x01 binary packet per spec. rtt_ranger.ino: one-sided Wi-Fi RTT per AP, packs Type 0x02 packet. Data passed to wifi_sender.ino (TASK-05C) for HTTPS POST. BLE transmitter removed from data path.",
+      "acceptance": "imu_reader.ino and rtt_ranger.ino compile for BW16 (Realtek Arduino SDK); serial output matches packet_format.h byte layout; verified by manual inspection of packed bytes against packet spec",
       "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/imu_reader.ino"
     },
     {
-      "id": "TASK-06",
-      "title": "Gateway API endpoints",
+      "id": "TASK-05C",
+      "title": "BW16 firmware — Wi-Fi HTTPS sender (replaces BLE transmitter)",
       "phase": 2,
       "phase_name": "Protocol",
       "owner": "person-b",
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "wifi_sender.ino: connects to QU-User SSID, base64-encodes binary IMU/RTT packets, POSTs to https://trakn.duckdns.org/api/v1/gateway/packet with X-API-Key header. Replaces ble_transmitter.ino. Device MAC 24:42:E3:15:E5:72 is pre-registered with QU IT.",
+      "acceptance": "wifi_sender.ino compiles for BW16; device connects to QU-User Wi-Fi and successfully POSTs to server; health check endpoint returns 200; OQ-01 (RTT SDK) resolved before this task starts",
+      "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/wifi_sender.ino"
+    },
+    {
+      "id": "TASK-06",
+      "title": "Device gateway API endpoint (direct HTTPS POST from BW16)",
+      "phase": 2,
+      "phase_name": "Protocol",
+      "owner": "person-b",
+      "status": "pending",
+      "completed_at": null,
+      "completed_by": null,
+      "notes": "POST /api/v1/gateway/packet — accepts direct HTTPS POSTs from BW16 device. Body: {device_mac, rx_ts_utc, payload_b64}. Auth: X-API-Key header. Decodes base64 payload, calls packet parser (TASK-05), routes to fusion coordinator (TASK-13). BLE gateway relay path removed.",
       "acceptance": "pytest tests/test_gateway_endpoints.py passes",
       "test_command": "pytest tests/test_gateway_endpoints.py --tb=short -q"
     },
@@ -195,7 +208,7 @@
       "status": "done",
       "completed_at": "2026-03-04T00:14:00Z",
       "completed_by": "person-c",
-      "notes": "coordinator.py: async on_imu/on_rtt pipeline, ZUPT, EKF divergence reset, mode logic, publish_position stub+set_publisher; 23 tests pass",
+      "notes": "coordinator.py: async on_imu/on_rtt pipeline, ZUPT, EKF divergence reset, mode logic, publish_position stub+set_publisher; 23 tests pass. Data now arrives via direct HTTPS POST from BW16 (not BLE gateway); coordinator interface unchanged.",
       "acceptance": "pytest tests/test_fusion_coordinator.py passes",
       "test_command": "pytest tests/test_fusion_coordinator.py --tb=short -q"
     },
@@ -208,7 +221,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "WSS endpoint at wss://trakn.duckdns.org/ws/position/{device_id} (port 443 via Nginx). Implements publish_position() called by coordinator. Nginx WebSocket upgrade headers already configured.",
       "acceptance": "pytest tests/test_websocket.py passes",
       "test_command": "pytest tests/test_websocket.py --tb=short -q"
     },
@@ -221,7 +234,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "Parent registers via QR code scan on tag. JWT auth. Endpoints: POST /auth/login, GET /devices/{device_id}/position, GET /devices (linked devices list). All traffic over HTTPS port 443.",
       "acceptance": "pytest tests/test_parent_api.py passes",
       "test_command": "pytest tests/test_parent_api.py --tb=short -q"
     },
@@ -234,7 +247,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "WebSocket URL: wss://trakn.duckdns.org/ws/position/{device_id}. Update from any prior ws:// or port 8000 URLs. Auth token passed as query param or header.",
       "acceptance": "flutter analyze shows 0 errors; WebSocket service connects to mock server",
       "test_command": "flutter analyze"
     },
@@ -247,7 +260,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "Renders child position on H07-C corridor floor plan. Confidence indicator from WebSocket message. QR code scan flow to link device.",
       "acceptance": "flutter build apk --debug succeeds; marker renders at correct coordinates",
       "test_command": "flutter build apk --debug"
     },
@@ -260,7 +273,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "End-to-end: simulate BW16 HTTPS POST (binary IMU+RTT payload) → gateway endpoint → fusion coordinator → WebSocket push → Flutter client. Direct Wi-Fi path only (no BLE gateway). Verify RMS error <= 2.5 m and P95 latency <= 2.5 s.",
       "acceptance": "pytest tests/integration/ passes; RMS error printed; latency P95 <= 2.5s",
       "test_command": "pytest tests/integration/ --tb=short -q"
     },
@@ -286,7 +299,7 @@
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": null,
+      "notes": "Verify full stack on GCP VM: curl https://trakn.duckdns.org/api/v1/health returns 200. Confirm BW16 posts live data. Confirm Flutter app receives live positions via WSS. Write DEPLOYMENT.md.",
       "acceptance": "pytest --tb=short -q shows 0 failures; docker compose up healthy; DEPLOYMENT.md written; final commit pushed",
       "test_command": "pytest --tb=short -q"
     }

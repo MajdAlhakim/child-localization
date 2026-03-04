@@ -1,17 +1,128 @@
 # Child Indoor Localization System â€” Session Log
 # Format: DONE [TASK-ID] (owner): <description> â€” <timestamp>
 # Append only. Never edit existing lines.
-DONE [TASK-01] (shared): Full scaffold — all dirs, placeholders, configs, rules, and docs committed and pushed — 2026-02-28T02:45:00Z
-DONE [TASK-02] (person-a): requirements.txt and Dockerfile created; docker compose build exits 0 — 2026-02-28T03:14:00Z
-DONE [TASK-03] (person-a): 7 SQLAlchemy ORM tables; SQLite in-memory tests; 14 tests pass — 2026-02-28T03:39:00Z
-DONE [TASK-04] (person-a): pydantic-settings config, JWT via python-jose, bcrypt passwords; 11 tests pass — 2026-02-28T03:39:00Z
-DONE [TASK-07] (person-a): correct(d_raw, offset)=max(d_raw-offset,0.5); 7 tests pass — 2026-02-28T03:39:00Z
-DONE [TASK-08] (person-a): JWT-protected CRUD ap_calibration, is_reliable gate; 8 tests pass — 2026-02-28T03:39:00Z
-DONE [INFRA] (person-a): Database hosted on Supabase PostgreSQL 16 (project: krfmibtoeffqlumhthyv, region: ap-southeast-1/Singapore); all 8 tables migrated (devices, device_links, parent_users, access_points, ap_calibration, imu_samples, rtt_measurements, position_estimates); FastAPI backend configured for Render.com deploy via render.yaml (Docker, autoDeploy from main); .env updated with Supabase pooler connection string; Dockerfile updated to use Render $PORT env var — 2026-02-28T04:52:36Z
-DONE [DEPLOY] (person-a): GCP e2-micro VM deployed at 35.238.189.188; Ubuntu 22.04, Docker Compose stack (FastAPI + PostgreSQL 16); systemd auto-restart enabled; health check confirmed healthy (database: connected, uptime: 722s); gateway endpoint pending person-b TASK-05/06 — 2026-03-03T21:34:00Z
-DONE [TASK-09] (person-c): grid_loader.py PNG/JSON loader + synthetic grid + coordinate helpers; 15 tests pass — 2026-03-04T00:14:00Z
-DONE [TASK-10] (person-c): observation_model.py mu/sigma/p_observation, locked Horn 2022 constants; 12 tests pass — 2026-03-04T00:14:00Z
-DONE [TASK-11] (person-c): bayesian_grid.py vectorised likelihood update, MAP estimate, collapse recovery; 13 tests pass — 2026-03-04T00:14:00Z
-DONE [TASK-12] (person-c): ekf.py 4-state KF predict/update, locked P0/Q/R, divergence check, ZUPT, reset; 22 tests pass — 2026-03-04T00:14:00Z
-DONE [TASK-12B] (person-c): pdr.py full MATLAB port - EMA, gyro bias, step detection, Weinberg+SVR hybrid, histogram, retrain; 39 tests pass — 2026-03-04T00:14:00Z
-DONE [TASK-13] (person-c): coordinator.py async on_imu/on_rtt, ZUPT, EKF divergence reset, mode logic, publish_position stub+set_publisher; 23 tests pass — 2026-03-04T00:14:00Z
+DONE [TASK-01] (shared): Full scaffold â€” all dirs, placeholders, configs, rules, and docs committed and pushed â€” 2026-02-28T02:45:00Z
+DONE [TASK-02] (person-a): requirements.txt and Dockerfile created; docker compose build exits 0 â€” 2026-02-28T03:14:00Z
+DONE [TASK-03] (person-a): 7 SQLAlchemy ORM tables; SQLite in-memory tests; 14 tests pass â€” 2026-02-28T03:39:00Z
+DONE [TASK-04] (person-a): pydantic-settings config, JWT via python-jose, bcrypt passwords; 11 tests pass â€” 2026-02-28T03:39:00Z
+DONE [TASK-07] (person-a): correct(d_raw, offset)=max(d_raw-offset,0.5); 7 tests pass â€” 2026-02-28T03:39:00Z
+DONE [TASK-08] (person-a): JWT-protected CRUD ap_calibration, is_reliable gate; 8 tests pass â€” 2026-02-28T03:39:00Z
+DONE [INFRA] (person-a): Database hosted on Supabase PostgreSQL 16 (project: krfmibtoeffqlumhthyv, region: ap-southeast-1/Singapore); all 8 tables migrated (devices, device_links, parent_users, access_points, ap_calibration, imu_samples, rtt_measurements, position_estimates); FastAPI backend configured for Render.com deploy via render.yaml (Docker, autoDeploy from main); .env updated with Supabase pooler connection string; Dockerfile updated to use Render $PORT env var â€” 2026-02-28T04:52:36Z
+DONE [DEPLOY] (person-a): GCP e2-micro VM deployed at 35.238.189.188; Ubuntu 22.04, Docker Compose stack (FastAPI + PostgreSQL 16); systemd auto-restart enabled; health check confirmed healthy (database: connected, uptime: 722s); gateway endpoint pending person-b TASK-05/06 â€” 2026-03-03T21:34:00Z
+DONE [TASK-09] (person-c): grid_loader.py PNG/JSON loader + synthetic grid + coordinate helpers; 15 tests pass â€” 2026-03-04T00:14:00Z
+DONE [TASK-10] (person-c): observation_model.py mu/sigma/p_observation, locked Horn 2022 constants; 12 tests pass â€” 2026-03-04T00:14:00Z
+DONE [TASK-11] (person-c): bayesian_grid.py vectorised likelihood update, MAP estimate, collapse recovery; 13 tests pass â€” 2026-03-04T00:14:00Z
+DONE [TASK-12] (person-c): ekf.py 4-state KF predict/update, locked P0/Q/R, divergence check, ZUPT, reset; 22 tests pass â€” 2026-03-04T00:14:00Z
+DONE [TASK-12B] (person-c): pdr.py full MATLAB port - EMA, gyro bias, step detection, Weinberg+SVR hybrid, histogram, retrain; 39 tests pass â€” 2026-03-04T00:14:00Z
+DONE [TASK-13] (person-c): coordinator.py async on_imu/on_rtt, ZUPT, EKF divergence reset, mode logic, publish_position stub+set_publisher; 23 tests pass â€” 2026-03-04T00:14:00Z
+DONE [DOCS] (shared): CLAUDE.md created at repo root â€” workspace rules for Claude Code auto-loading; consolidates session protocol, task ownership, locked architecture, math constants, API contracts, performance requirements; architecture table updated for direct Wi-Fi path â€” 2026-03-04T00:00:00Z
+
+================================================================================
+CHILD INDOOR LOCALIZATION SYSTEM â€” PROJECT PROGRESS LOG
+Qatar University, Building H07, Corridor C
+================================================================================
+--------------------------------------------------------------------------------
+[2026-03-04] ARCHITECTURE DECISION â€” Direct Wi-Fi Connectivity (v4.0)
+--------------------------------------------------------------------------------
+DECISION: Tag connects directly to venue Wi-Fi. GSM and BLE gateway paths removed.
+RATIONALE:
+  The project is deployed as a venue-managed system. The venue IT team registers
+  the device MAC address once on their network. The tag connects to venue Wi-Fi
+  as a standard station and POSTs data directly to the cloud server over HTTPS.
+  This eliminates the need for a GSM module (cost/availability constraints) and
+  BLE gateway infrastructure (not required when direct Wi-Fi is available).
+DEPLOYMENT MODEL CONFIRMED:
+  - Tag is a venue-managed rental asset (like a stroller or locker key)
+  - Parent interaction: scan QR code on tag -> app links to device -> live tracking
+  - Venue IT registers device MAC address once -- device auto-connects on power-on
+FILES UPDATED:
+  - 01-PRD.md        -> v4.0: architecture, sections 1-7, 12, 14, 16, 18, 19, glossary
+  - 03-workspace-rules.md -> architecture constraints, API contracts, task ownership
+  - 04-knowledge-item.md  -> transport decisions updated
+  - 05-tasks.json         -> TASK-05C added; TASK-05, 06, 13, 18 updated
+  - docker-compose.yml    -> Nginx service added (TLS port 443)
+  - nginx/nginx.conf      -> new file: TLS termination + WebSocket proxy
+--------------------------------------------------------------------------------
+[2026-03-04] IT INFRASTRUCTURE â€” QU Wi-Fi Access Confirmed
+--------------------------------------------------------------------------------
+STATUS: COMPLETE
+  QU IT team (contact: Ajay) confirmed device MAC address registered on QU-User
+  Wi-Fi network for internet access. Standard ports TCP 80/443 enabled by default.
+  Device MAC: 24:42:E3:15:E5:72  (BW16 hardware MAC -- permanent)
+  Network:    QU-User
+  Access:     Internet only -- outbound HTTPS to 35.238.189.188 port 443
+  Duration:   ~3 months (remainder of current semester)
+  OQ-06 (GSM module) -- CLOSED. GSM not required; direct Wi-Fi used instead.
+  OQ-07 (battery for GSM) -- CLOSED. GSM not required.
+  OQ-02 (BLE gateway protocol) -- CLOSED. BLE gateway not required.
+--------------------------------------------------------------------------------
+[2026-03-04] SERVER â€” Port Migration: 8000 -> 443
+--------------------------------------------------------------------------------
+STATUS: FILES READY â€” AWAITING DEPLOYMENT ON GCP VM
+  QU firewall allows TCP 443 by default. TCP 8000 requires a separate ISO team
+  request. Decision: migrate server to port 443 via Nginx TLS termination.
+  Architecture:
+    Public:   HTTPS port 443 -> Nginx
+    Internal: Nginx -> FastAPI on port 8000 (not publicly exposed)
+    WebSocket: WSS on port 443 via /ws/ location block with upgrade headers
+  Files added to repo:
+    docker-compose.yml  -- nginx service added, backend port 8000 internal only
+    nginx/nginx.conf    -- TLS termination, REST proxy, WebSocket proxy
+    SWITCH_TO_443.md    -- step-by-step deployment instructions for GCP VM
+  TO DO (person-a): -> (DONE)
+    1. SSH into GCP VM (35.238.189.188)
+    2. Follow SWITCH_TO_443.md steps
+    3. Verify: curl -k https://trakn.duckdns.org/api/v1/health returns 200
+    4. Update firmware server URL from https://trakn.duckdns.org:8000 to https://trakn.duckdns.org
+    5. Update Flutter WebSocket URL from ws://... to wss://...
+--------------------------------------------------------------------------------
+[2026-03-04] DOMAIN â€” trakn.duckdns.org registered and linked
+--------------------------------------------------------------------------------
+  Domain:  trakn.duckdns.org
+  IP:      35.238.189.188 (GCP e2-micro VM, static IP)
+  Provider: DuckDNS (free, persistent domain)
+  All project URLs updated:
+    API endpoint:  https://trakn.duckdns.org/api/v1/gateway/packet
+    WebSocket:     wss://trakn.duckdns.org/ws/position/{device_id}
+    Health check:  https://trakn.duckdns.org/api/v1/health
+  TO DO (person-a -- run on GCP VM) -> (DONE)
+    sudo certbot --nginx -d trakn.duckdns.org --non-interactive --agree-tos --email <email>
+    sudo certbot renew --dry-run
+    sudo docker compose up -d --build
+    curl https://trakn.duckdns.org/api/v1/health
+--------------------------------------------------------------------------------
+[2026-03-04] IT INFRASTRUCTURE â€” AP Location Survey
+--------------------------------------------------------------------------------
+STATUS: OPEN â€” MANUAL SURVEY REQUIRED
+  QU IT confirmed ~120 APs across all floors of Building H07, Corridor C
+  (male and female sides). No floor plan drawings with AP locations available.
+  ACTION REQUIRED:
+    Team must conduct a manual survey of Corridor C:
+    - Walk the corridor with a Wi-Fi scanner (e.g. WiFi Analyzer on Android)
+    - Record BSSID, SSID, RSSI, and approximate physical position for each AP
+    - Note position relative to corridor landmarks (doors, stairs, room numbers)
+    - Enter results into access_points table via admin API after calibration setup
+  This closes OQ-03 partially -- AP positions will be approximate until surveyed.
+--------------------------------------------------------------------------------
+[2026-03-04] HARDWARE â€” BW16 MAC Address Retrieved
+--------------------------------------------------------------------------------
+  Successfully retrieved BW16 hardware MAC address using Arduino firmware sketch.
+  MAC confirmed as non-zero and stable across resets.
+  OUI 24:42:E3 verified as Realtek Semiconductor Corp.
+  MAC: 24:42:E3:15:E5:72
+  Status: Registered with QU IT on QU-User network.
+--------------------------------------------------------------------------------
+OPEN QUESTIONS (current)
+--------------------------------------------------------------------------------
+  OQ-01  Does BW16 Realtek SDK expose per-BSSID one-sided FTM RTT?
+         Status: OPEN -- Critical. Must confirm before TASK-06 firmware testing.
+  OQ-03  AP physical coordinates in H07-C.
+         Status: OPEN -- IT has no floor plan. Manual survey planned.
+  OQ-04  Do QU APs support 40/80 MHz bandwidth for RTT?
+         Status: OPEN -- Medium impact on accuracy.
+  OQ-05  Which QU APs in H07-C are DFS 5 GHz band?
+         Status: OPEN -- DFS APs must be excluded from ranging.
+
+================================================================================
+END OF LOG
+================================================================================
