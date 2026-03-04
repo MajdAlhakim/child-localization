@@ -122,20 +122,14 @@ The stack restarts automatically on VM reboot via systemd.
 
 **Requirements:** Arduino IDE or arduino-cli with Realtek AmebaD board support installed.
 
-**Step 1 — Flash IMU reader:**
+The firmware is a **single unified sketch** (`firmware/bw16/main/main.ino`) that runs all subsystems concurrently — IMU sampling, Wi-Fi RTT ranging, and HTTPS packet transmission. Each flash overwrites the entire device, so all functionality must be compiled and uploaded together.
+
+**Flash the firmware:**
 ```bash
-arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/imu_reader.ino --upload -p <PORT>
+arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino --upload -p <PORT>
 ```
 
-**Step 2 — Flash RTT ranger:**
-```bash
-arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/rtt_ranger.ino --upload -p <PORT>
-```
-
-**Step 3 — Flash Wi-Fi HTTPS sender:**
-```bash
-arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/wifi_sender.ino --upload -p <PORT>
-```
+Or open `firmware/bw16/main/main.ino` in Arduino IDE and click **Upload**.
 
 The device will:
 1. Connect to `QU-User` Wi-Fi automatically (MAC pre-registered with QU IT)
