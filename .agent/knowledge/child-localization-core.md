@@ -26,7 +26,7 @@ failure modes, and team structure documented here were established during Senior
 child localization, indoor localization, BW16, RTT, IMU, EKF, PDR, Bayesian grid,
 observation model, offset calibration, sensor fusion, FastAPI, asyncpg, Flutter,
 WebSocket, BLE gateway (Model 2 future work), Qatar University, H07, corridor, senior design, tasks.json,
-TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-05B, TASK-06, TASK-07, TASK-08,
+TASK-01, TASK-02, TASK-03, TASK-04, TASK-05, TASK-05B, TASK-05C, TASK-06, TASK-07, TASK-08,
 TASK-09, TASK-10, TASK-11, TASK-12, TASK-12B, TASK-13, TASK-14, TASK-15, TASK-16,
 TASK-17, TASK-18, TASK-19, TASK-20, person-a, person-b, person-c, person-d,
 MPU6050, step detection, stride length, Weinberg, SVR, histogram, pdr.py,
@@ -234,7 +234,7 @@ ZUPT (|a| < 0.05 m/s² for > 2 s) → set vx = vy = 0.
 
 ```
 Type: reference
-Verified: 2026-02-28
+Verified: 2026-03-04
 ```
 
 4-person team. All work done in joint working sessions using Antigravity IDE with Claude agents.
@@ -244,28 +244,7 @@ Each laptop runs one agent. Agents work in parallel on separate task sets.
 | Identity | Tasks |
 |---|---|
 | person-a | TASK-02, 03, 04, 07, 08, 19 (Infrastructure & Calibration) |
-| person-b | TASK-05, 06, 18 (Firmware & Protocol) |
-| person-c | TASK-09, 10, 11, 12, 13 (Fusion Engine) |
-| person-d | TASK-14, 15, 16, 17, 20 (Mobile & WebSocket) |
-| shared | TASK-01 (done together first) |
-
----
-
-## Artifact 6 — Team and Task Ownership
-
-```
-Type: reference
-Verified: 2026-02-28
-```
-
-4-person team. All work done in joint working sessions using Antigravity IDE with Claude agents.
-Each laptop runs one agent. Agents work in parallel on separate task sets.
-`tasks.json` is on GitHub. Pull-merge-push protocol prevents overwrites (see workspace rules).
-
-| Identity | Tasks |
-|---|---|
-| person-a | TASK-02, 03, 04, 07, 08, 19 (Infrastructure & Calibration) |
-| person-b | TASK-05, 05B, 06, 18 (Firmware, Protocol, BW16 port) |
+| person-b | TASK-05, 05B, 05C, 06, 18 (Firmware, Protocol, BW16 unified sketch) |
 | person-c | TASK-09, 10, 11, 12, 12B, 13 (Fusion Engine + PDR Python module) |
 | person-d | TASK-14, 15, 16, 17, 20 (Mobile & WebSocket) |
 | shared | TASK-01 (done together first) |

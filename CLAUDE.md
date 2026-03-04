@@ -84,7 +84,7 @@ Step 9.  IF push is rejected (exit code non-zero):
 | Laptop | Owner identity | Tasks | Files (write access) |
 |--------|----------------|-------|----------------------|
 | A | `person-a` | TASK-02,03,04,07,08,19 | `backend/app/db/*`, `backend/app/core/config.py`, `backend/app/core/security.py`, `backend/app/api/admin.py`, `docker-compose.yml`, `Dockerfile`, `backend/requirements.txt` |
-| B | `person-b` | TASK-05,05B,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/bw16/*` |
+| B | `person-b` | TASK-05,05B,05C,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/bw16/*` |
 | C | `person-c` | TASK-09,10,11,12,12B,13 | `backend/app/fusion/*` (includes `pdr.py`, `stride_svr.pkl`, `stride_training_data.json`) |
 | D | `person-d` | TASK-14,15,16,17,20 | `backend/app/api/websocket.py`, `backend/app/api/parent.py`, `app/lib/*` |
 | All | `shared` | TASK-01 | Project scaffold |
@@ -206,9 +206,9 @@ RTT (0x02) — variable, little-endian:
 
 ## 9. API Contracts (Locked Wire Formats)
 
-**Gateway POST body (BW16 → server):**
+**Gateway POST body (BW16 → server, direct Wi-Fi):**
 ```json
-{ "ap_bssid": "AA:BB:CC:DD:EE:FF", "ap_rssi_ble": -65,
+{ "device_mac": "24:42:E3:15:E5:72",
   "rx_ts_utc": "2026-02-27T10:15:30.123Z", "payload_b64": "<base64>" }
 ```
 Authentication: `X-API-Key` header.
@@ -273,7 +273,18 @@ EKF divergence (> 10 m for > 5 cycles): reset state from Bayesian MAP, P = P₀.
 ## 13. Open Questions — Stop and Flag if Your Code Touches These
 
 - **OQ-01:** Does BW16 Realtek SDK expose per-BSSID one-sided FTM RTT with burst control?
-- **OQ-02:** What BLE gateway protocol do QU APs support? (HTTP webhook / MQTT / Cisco CMX)
-- **OQ-03:** Exact AP (x, y, z) coordinates in H07-C — not yet confirmed from IT
+- ~~**OQ-02:** What BLE gateway protocol do QU APs support?~~ **CLOSED** — BLE gateway not required; direct Wi-Fi used.
+- **OQ-03:** Exact AP (x, y, z) coordinates in H07-C — IT has no floor plan; manual survey required
 - **OQ-04:** QU AP bandwidth — 20 MHz confirmed; 40/80 MHz availability unknown
 - **OQ-05:** Which QU APs are in DFS 5 GHz band — list not yet obtained
+
+## 14. Firmware Note
+
+The BW16 firmware is a **single unified sketch**: `firmware/bw16/main/main.ino`.
+All subsystems (IMU reader, RTT ranger, Wi-Fi HTTPS sender) are compiled and flashed together.
+Flashing overwrites the entire device — never flash subsystem files individually.
+
+```bash
+# Flash everything at once
+arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino --upload -p <PORT>
+```

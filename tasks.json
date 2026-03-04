@@ -71,29 +71,29 @@
     },
     {
       "id": "TASK-05B",
-      "title": "BW16 firmware — IMU reader + RTT ranger (MPU6050 sampling)",
+      "title": "BW16 firmware — IMU reader + RTT ranger subsystems (unified sketch)",
       "phase": 2,
       "phase_name": "Protocol",
       "owner": "person-b",
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": "imu_reader.ino: MPU6050 at 100 Hz, packs Type 0x01 binary packet per spec. rtt_ranger.ino: one-sided Wi-Fi RTT per AP, packs Type 0x02 packet. Data passed to wifi_sender.ino (TASK-05C) for HTTPS POST. BLE transmitter removed from data path.",
-      "acceptance": "imu_reader.ino and rtt_ranger.ino compile for BW16 (Realtek Arduino SDK); serial output matches packet_format.h byte layout; verified by manual inspection of packed bytes against packet spec",
-      "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/imu_reader.ino"
+      "notes": "Implemented inside firmware/bw16/main/main.ino (unified sketch — all subsystems compiled together). IMU subsystem: MPU6050 at 100 Hz, packs Type 0x01 binary packet per spec. RTT subsystem: one-sided Wi-Fi RTT per AP, packs Type 0x02 packet. Both subsystems hand data to the Wi-Fi sender subsystem (TASK-05C) within the same sketch.",
+      "acceptance": "firmware/bw16/main/main.ino compiles for BW16 (Realtek Arduino SDK); serial output matches packet_format.h byte layout for both IMU and RTT packet types; verified by manual inspection of packed bytes against packet spec",
+      "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino"
     },
     {
       "id": "TASK-05C",
-      "title": "BW16 firmware — Wi-Fi HTTPS sender (replaces BLE transmitter)",
+      "title": "BW16 firmware — Wi-Fi HTTPS sender subsystem (unified in main.ino)",
       "phase": 2,
       "phase_name": "Protocol",
       "owner": "person-b",
       "status": "pending",
       "completed_at": null,
       "completed_by": null,
-      "notes": "wifi_sender.ino: connects to QU-User SSID, base64-encodes binary IMU/RTT packets, POSTs to https://trakn.duckdns.org/api/v1/gateway/packet with X-API-Key header. Replaces ble_transmitter.ino. Device MAC 24:42:E3:15:E5:72 is pre-registered with QU IT.",
-      "acceptance": "wifi_sender.ino compiles for BW16; device connects to QU-User Wi-Fi and successfully POSTs to server; health check endpoint returns 200; OQ-01 (RTT SDK) resolved before this task starts",
-      "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/wifi_sender.ino"
+      "notes": "Wi-Fi sender subsystem inside firmware/bw16/main/main.ino. Connects to QU-User SSID on startup, base64-encodes binary IMU/RTT packets from TASK-05B subsystems, POSTs to https://trakn.duckdns.org/api/v1/gateway/packet with X-API-Key header. Device MAC 24:42:E3:15:E5:72 pre-registered with QU IT. All subsystems (IMU, RTT, Wi-Fi sender) are part of the same single compiled sketch — flashing main.ino deploys everything at once.",
+      "acceptance": "firmware/bw16/main/main.ino compiles for BW16; device connects to QU-User Wi-Fi and successfully POSTs to server; curl https://trakn.duckdns.org/api/v1/health returns 200; OQ-01 (RTT SDK) resolved before this task starts",
+      "test_command": "arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino"
     },
     {
       "id": "TASK-06",

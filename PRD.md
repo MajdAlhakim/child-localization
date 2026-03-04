@@ -929,7 +929,8 @@ project-root/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── firmware/
-│   └── bw16/             imu_reader.ino, rtt_ranger.ino, wifi_transmitter.ino,
+│   └── bw16/
+│       └── main/         main.ino (unified sketch — IMU + RTT + Wi-Fi sender),
 │                         packet_format.h
 ├── app/
 │   └── lib/              screens/, services/, models/
