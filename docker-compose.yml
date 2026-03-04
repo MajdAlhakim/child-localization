@@ -1,29 +1,47 @@
+version: "3.9"
+
 services:
+
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: localization
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: changeme
+      POSTGRES_DB: localization
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U admin -d localization" ]
+      test: ["CMD-SHELL", "pg_isready -U admin -d localization"]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   backend:
     build: ./backend
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://admin:changeme@db:5432/localization
     depends_on:
       db:
         condition: service_healthy
+    # Backend is NOT exposed on public port 8000 anymore
+    # All traffic comes through Nginx on 443
+    expose:
+      - "8000"
+
+  nginx:
+    image: nginx:1.25-alpine
     restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
