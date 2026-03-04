@@ -1,1 +1,141 @@
-﻿// placeholder
+﻿// firmware/bw16/ble_transmitter.ino  (renamed role: Wi-Fi direct transmitter)
+// BW16 Wi-Fi HTTPS transmitter — TASK-05C
+//
+// Connects BW16 to QU-User Wi-Fi (MAC 24:42:E3:15:E5:72 registered by IT).
+// POSTs IMU (0x01) and RTT (0x02) packets to the cloud server via HTTPS on port 443.
+//
+// Endpoint: POST https://trakn.duckdns.org/api/v1/gateway/packet
+// Header:   X-API-Key: <GATEWAY_API_KEY>
+// Body:     { "device_mac": "24:42:E3:15:E5:72",
+//             "rx_ts_utc":  "<ISO-8601>",
+//             "payload_b64": "<base64>" }
+//
+// On POST failure: retry once after 500 ms.
+// On Wi-Fi disconnect: reconnect every 5 s; buffer locally during outage.
+
+#include <WiFiClient.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include "Base64.h"        // Arduino Base64 library
+#include "packet_format.h"
+
+// ── Wi-Fi credentials ─────────────────────────────────────────────────────────
+static const char* WIFI_SSID = "QU-User";
+static const char* WIFI_PASS = "";          // Open network — authenticated by MAC
+
+// ── Server ────────────────────────────────────────────────────────────────────
+static const char* SERVER_URL =
+    "https://trakn.duckdns.org/api/v1/gateway/packet";
+static const char* API_KEY    =
+    "580a92b1cad8ad81b7ae90c23fb222443d9c87aac4ce4a7728a3f9e99e3e4990";
+static const char* DEVICE_MAC = "24:42:E3:15:E5:72";
+
+// ── Local packet buffer (stores up to 30 s of IMU at 4 posts/s = 120 entries) ─
+#define BUF_MAX 128
+static uint8_t  _buf_data[BUF_MAX][PKT_IMU_LEN];
+static uint16_t _buf_len [BUF_MAX];
+static int      _buf_head = 0;
+static int      _buf_tail = 0;
+static int      _buf_count = 0;
+
+static void buf_push(const uint8_t* data, uint16_t len) {
+    if (_buf_count == BUF_MAX) return;           // drop oldest on overflow
+    memcpy(_buf_data[_buf_tail], data, len);
+    _buf_len[_buf_tail] = len;
+    _buf_tail = (_buf_tail + 1) % BUF_MAX;
+    _buf_count++;
+}
+
+// ── ISO-8601 timestamp (millis-based, no RTC) ─────────────────────────────────
+static String iso8601_now() {
+    // Without RTC, use a fixed epoch + millis offset.
+    // Replace with NTP sync if available.
+    unsigned long ms = millis();
+    char buf[32];
+    snprintf(buf, sizeof(buf), "2026-01-01T00:00:%02lu.%03luZ",
+             (ms / 1000) % 60, ms % 1000);
+    return String(buf);
+}
+
+// ── HTTP POST helper ──────────────────────────────────────────────────────────
+static bool post_packet(const uint8_t* data, uint16_t len) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    // Base64-encode the binary payload
+    String b64 = base64::encode(data, len);
+
+    // Build JSON body
+    String body = "{\"device_mac\":\"";
+    body += DEVICE_MAC;
+    body += "\",\"rx_ts_utc\":\"";
+    body += iso8601_now();
+    body += "\",\"payload_b64\":\"";
+    body += b64;
+    body += "\"}";
+
+    HTTPClient https;
+    https.begin(SERVER_URL);
+    https.addHeader("Content-Type", "application/json");
+    https.addHeader("X-API-Key", API_KEY);
+
+    int code = https.POST(body);
+    https.end();
+
+    return (code == 200 || code == 201 || code == 204);
+}
+
+// ── Wi-Fi reconnect ───────────────────────────────────────────────────────────
+static unsigned long _last_wifi_attempt = 0;
+
+static void ensure_wifi() {
+    if (WiFi.status() == WL_CONNECTED) return;
+    unsigned long now = millis();
+    if (now - _last_wifi_attempt < 5000) return;
+    _last_wifi_attempt = now;
+    Serial.println("[WiFi] Reconnecting…");
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+void wifi_transmitter_setup() {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    Serial.print("[WiFi] Connecting to ");
+    Serial.println(WIFI_SSID);
+    unsigned long deadline = millis() + 15000;
+    while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+        delay(200);
+        Serial.print('.');
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\n[WiFi] Connected. IP: " + WiFi.localIP().toString());
+    } else {
+        Serial.println("\n[WiFi] Failed — will retry every 5 s");
+    }
+}
+
+// Call this from the main loop with a fully-formed BLE packet (IMU or RTT).
+void wifi_transmitter_send(const uint8_t* pkt, uint16_t len) {
+    ensure_wifi();
+
+    // Flush any buffered packets first (oldest first)
+    while (_buf_count > 0) {
+        const uint8_t* d = _buf_data[_buf_head];
+        uint16_t l = _buf_len[_buf_head];
+        if (!post_packet(d, l)) {
+            buf_push(pkt, len);   // also buffer the new packet, give up for now
+            return;
+        }
+        _buf_head = (_buf_head + 1) % BUF_MAX;
+        _buf_count--;
+    }
+
+    // Send the new packet
+    if (!post_packet(pkt, len)) {
+        delay(500);
+        if (!post_packet(pkt, len)) {
+            buf_push(pkt, len);  // buffer for later
+        }
+    }
+}
