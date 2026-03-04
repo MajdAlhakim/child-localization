@@ -1,10 +1,14 @@
 # Product Requirements Document
+
 ## Child Indoor Localization System
+
 ### Qatar University — Building H07, C Corridor
-**Version:** 2.0
-**Date:** February 2026
+
+**Version:** 4.0
+**Date:** March 2026
 **Status:** Active — Senior Design Project
 **Team:** 4 members
+**Change from v3.0:** Simplified to direct Wi-Fi connectivity. GSM and BLE gateway paths removed. Tag connects directly to venue Wi-Fi and POSTs over HTTPS to server on port 443.
 
 ---
 
@@ -35,9 +39,15 @@
 
 ## 1. Project Overview
 
-This project implements a real-time indoor child localization system for deployment in Qatar University Building H07, C Corridor. A child wearing a BW16 embedded device is tracked continuously. Parents receive live position updates on a Flutter mobile application. The system fuses one-sided Wi-Fi RTT ranging with IMU-based pedestrian dead reckoning (PDR) through an Extended Kalman Filter (EKF) to achieve sub-4-meter positioning accuracy in a GPS-denied indoor environment.
+This project implements a real-time indoor child localization system for deployment in Qatar University Building H07, C Corridor. A child wearing a BW16 wearable device is tracked continuously. Parents receive live position updates on a Flutter mobile application.
 
-**Core user story:** A parent opens the app and sees their child's current position on a floor plan of the corridor, updated at least 4 times per second, with a confidence indicator that degrades gracefully when signal quality drops.
+The system fuses one-sided Wi-Fi RTT ranging with IMU-based pedestrian dead reckoning (PDR) through an Extended Kalman Filter (EKF) to achieve sub-4-meter positioning accuracy in a GPS-denied indoor environment.
+
+The device connects directly to venue Wi-Fi and transmits data to the cloud server over HTTPS. No BLE gateway, no GSM module, and no additional infrastructure is required beyond the existing venue Wi-Fi network. The venue IT team registers the device MAC address once, and the device connects automatically on every subsequent power-on.
+
+**Deployment model:** The tag is a venue-managed asset — registered to the venue Wi-Fi by IT staff, rented to parents at the venue entrance (like a stroller or locker key), and returned at exit. The parent links their app to a specific tag by scanning a QR code printed on the device.
+
+**Core user story:** A parent scans the QR code on the tag, opens the app, and sees their child's current position on a floor plan of the corridor, updated at least 4 times per second, with a confidence indicator that degrades gracefully when signal quality drops.
 
 ---
 
@@ -45,40 +55,53 @@ This project implements a real-time indoor child localization system for deploym
 
 GPS does not penetrate indoor environments with sufficient accuracy. Fingerprint-based Wi-Fi localization requires expensive site surveys that become stale as infrastructure changes. Camera-based tracking raises unacceptable privacy concerns in a university setting.
 
-One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused with IMU-based step detection and heading estimation, provides a practical and privacy-preserving alternative. The QU H07 corridor has known AP infrastructure that can serve as ranging anchors without modification to the APs.
+One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused with IMU-based step detection and heading estimation, provides a practical and privacy-preserving alternative. The QU H07 corridor has known AP infrastructure (~120 APs across all floors of Corridor C) that serves as ranging anchors. The device connects directly to venue Wi-Fi and transmits data to the cloud server — no additional infrastructure required.
 
 **Constraints specific to this deployment:**
+
 - QU access points do not support IEEE 802.11-2016 cooperative two-sided FTM ranging.
-- The BW16 device cannot directly authenticate to the university Wi-Fi network.
-- The university network cannot be relied upon as the server hosting environment.
+- The BW16 connects to QU Wi-Fi using a registered MAC address (24:42:E3:15:E5:72) — confirmed by QU IT on 4 March 2026.
+- The university network cannot be relied upon as the server hosting environment — a GCP cloud VM is used instead.
 - Corridor geometry imposes non-line-of-sight (NLOS) RTT bias at longer distances.
+- AP physical coordinates not available from IT — manual survey required (OQ-03).
 
 ---
 
 ## 3. System Architecture
 
 ```
-┌─────────────┐     BLE      ┌──────────────┐    HTTP POST     ┌─────────────────────┐
-│  BW16 Device│ ──────────►  │  QU AP (BLE  │ ────────────►    │  Cloud Server       │
-│  (child)    │              │   gateway)   │  (public IP)     │  FastAPI + Postgres  │
-└─────────────┘              └──────────────┘                  │  Fusion Engine       │
-                                                               │  (EKF + Bayesian)   │
-                                                               └─────────┬───────────┘
-                                                                         │ WebSocket
-                                                               ┌─────────▼───────────┐
-                                                               │  Flutter Parent App  │
-                                                               │  (live map + alerts) │
-                                                               └─────────────────────┘
+┌─────────────────────────┐   HTTPS POST (port 443)   ┌─────────────────────────┐
+│  BW16 + MPU6050 (child) │ ────────────────────────► │  Cloud Server           │
+│                         │   venue Wi-Fi direct       │  35.238.189.188         │
+│  ● IMU @ 100 Hz         │   JSON + base64 payload    │  FastAPI + Postgres      │
+│  ● RTT @ ≥2 Hz          │                            │  Nginx (TLS port 443)   │
+│  ● Wi-Fi: QU-User       │                            │  EKF + Bayesian fusion  │
+│    MAC: 24:42:E3:15:E5:72│                           └────────────┬────────────┘
+└─────────────────────────┘                                         │ WSS (port 443)
+                                                         ┌──────────▼──────────┐
+                                                         │  Flutter Parent App  │
+                                                         │  (live map + alerts) │
+                                                         └─────────────────────┘
 ```
 
 **Data flow:**
-1. BW16 samples IMU at ≥50 Hz and performs one-sided RTT ranging at ≥2 Hz against visible APs.
-2. BW16 transmits BLE advertisement packets containing encoded IMU and RTT payloads.
-3. QU access points receive BLE packets and forward them via HTTP POST to the cloud server's public endpoint.
-4. The cloud server parses packets, applies per-AP RTT offset correction, runs the Bayesian grid update, runs EKF predict+update, and publishes the fused position via WebSocket.
-5. The parent app subscribes to the WebSocket stream and renders the position on the floor plan.
 
-**Server hosting:** Cloud VM with a static public IP address (not on the university network). The IT department configures the AP BLE gateway to POST to this IP and port. This decouples the system from university network access and makes it accessible from anywhere.
+1. Venue IT registers device MAC address `24:42:E3:15:E5:72` to QU-User Wi-Fi once
+2. BW16 powers on → connects to QU-User Wi-Fi automatically
+3. BW16 samples IMU at 100 Hz and performs RTT ranging at ≥2 Hz against visible APs
+4. BW16 packs readings into JSON with base64-encoded payload and POSTs to server over HTTPS port 443
+5. Server authenticates API key, parses packet, runs EKF + Bayesian fusion, publishes position via WebSocket
+6. Parent app (subscribed via WSS) renders live position on floor plan at ≥4 Hz
+
+**Parent onboarding flow:**
+
+1. Parent receives/rents the tag at venue entrance
+2. Parent opens Flutter app → taps "Add Device"
+3. Parent scans QR code printed on the tag (encodes device MAC / device ID)
+4. App registers parent account as linked to that device ID on the server
+5. App immediately begins receiving live position updates via WebSocket
+
+**Server hosting:** Google Cloud e2-micro VM, static IP 35.238.189.188, Premium network tier. Nginx terminates TLS on port 443 and proxies to FastAPI on port 8000 internally. Port 443 is open inbound in QU firewall by default — no special firewall request required.
 
 ---
 
@@ -88,7 +111,9 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 
 - **Manufacturer:** Realtek (RTL8720DN dual-band Wi-Fi + BLE 5.0)
 - **Role:** Wearable sensor node worn by the child
-- **Capabilities used:** IMU sampling, Wi-Fi RTT ranging (one-sided FTM), BLE advertisement
+- **Capabilities used:** IMU sampling, Wi-Fi RTT ranging (one-sided FTM), Wi-Fi station (direct network connection), BLE advertisement
+- **Wi-Fi MAC address:** `24:42:E3:15:E5:72` (hardware MAC — permanent, registered with QU IT)
+- **Network:** Connects to QU-User Wi-Fi; POSTs data to server over HTTPS port 443
 - **Power:** Battery-powered, must sustain a full day of operation
 - **Mounting:** Wrist or lanyard enclosure
 
@@ -110,39 +135,51 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 ### 4.3 Infrastructure Access Points
 
 - QU Building H07, C Corridor existing Wi-Fi infrastructure
-- Must support: BLE gateway functionality (receive BLE advertisements, forward via HTTP)
+- **Confirmed by IT (4 March 2026):** approximately 120 APs across all floors of Corridor C, male and female sides
+- Role: both Wi-Fi connectivity for the device and RTT ranging anchors
 - Band: 20 MHz bandwidth confirmed; 40/80 MHz TBD (see OQ-04)
-- Exact BSSID list and physical coordinates: pending IT confirmation (see OQ-03)
+- Physical coordinates: not available from IT — manual survey required (see OQ-03)
+- BSSIDs: discoverable by Wi-Fi scan from the device during operation
 
 ---
 
 ## 5. Communication and Connectivity
 
-### 5.1 BW16 → AP (BLE)
+### 5.1 Direct Wi-Fi Architecture
 
-- Protocol: BLE 5.0 advertisement
-- Payload: encoded IMU or RTT packet (see Section 15)
-- No pairing required; AP receives in passive scan mode
+The BW16 connects directly to the venue Wi-Fi network as a standard Wi-Fi station and POSTs data to the cloud server over HTTPS. No BLE gateway, no GSM module, no intermediary hardware.
 
-### 5.2 AP → Server (HTTP POST over Internet)
+```
+BW16 (Wi-Fi station) → venue Wi-Fi → internet → HTTPS POST → server:443
+```
 
-- Protocol: HTTPS POST to public server IP
-- The IT department configures the AP BLE gateway with: destination IP, port (443 recommended), endpoint path, and API key
-- Payload: base64-encoded BLE packet with metadata (see Section 14.1)
-- Firewall: outbound port 443 is typically open on university networks without special rules
+### 5.2 Device → Server (Direct Wi-Fi POST)
+
+- **Protocol:** HTTPS POST over venue Wi-Fi
+- **Endpoint:** `POST https://trakn.duckdns.org/api/v1/gateway/packet`
+- **Port:** 443 (standard HTTPS — enabled by default in QU firewall)
+- **Header:** `X-API-Key: <gateway_api_key>` (baked into firmware)
+- **Body:** JSON with `device_mac`, `rx_ts_utc`, `payload_b64` (see Section 14)
+- **Packet types:** IMU (0x01) and RTT (0x02)
+- **Upload cadence:** Batch 25 IMU samples (250 ms at 100 Hz), POST every 250 ms. RTT packets POST immediately on ranging cycle completion (≥2 Hz)
+- **On POST failure:** retry once with 500 ms delay; buffer locally up to 30 s; flush with original timestamps on reconnect
+- **Wi-Fi credentials:** SSID `QU-User`, MAC `24:42:E3:15:E5:72` registered by IT — device connects automatically on power-on
 
 ### 5.3 Server → App (WebSocket)
 
-- Protocol: WSS (WebSocket over TLS)
+- Protocol: WSS (WebSocket over TLS, port 443)
 - Push model: server publishes position updates at ≥4 Hz
 - App subscribes on session open; reconnects automatically on drop
+- Endpoint: `wss://trakn.duckdns.org/ws/position/{device_id}`
 
-### 5.4 Server Hosting Requirements
+### 5.4 Server Hosting
 
-- Static public IP address
-- TLS certificate (Let's Encrypt / Certbot, free)
-- Minimum VM spec: 1 vCPU, 1 GB RAM (sufficient for prototype with 1–5 devices)
-- Recommended providers: AWS EC2 t3.micro, DigitalOcean Droplet, Oracle Cloud Free Tier
+- Provider: Google Cloud Platform — e2-micro VM, Premium network tier
+- Static IP: **35.238.189.188**
+- TLS termination: Nginx on port 443 → FastAPI on port 8000 (internal only — not publicly exposed)
+- TLS certificate: Let's Encrypt via nip.io domain or self-signed
+- Firewall: TCP 443 open inbound (standard — no special request needed)
+- Port 8000 NOT exposed publicly — internal only
 
 ---
 
@@ -151,6 +188,7 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 ### 6.1 IMU Sampling — BW16 + MPU6050
 
 **Hardware setup:**
+
 - MPU6050 connected to BW16 via I2C at 400 kHz
 - I2C address: 0x68 (AD0 pin low)
 - Wake MPU6050 on startup: write 0x00 to PWR_MGMT_1 (0x6B)
@@ -167,6 +205,7 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 | CONFIG | 0x1A | 0x04 | 21 Hz DLPF bandwidth |
 
 **Sampling loop:**
+
 - Read all 14 bytes starting at ACCEL_XOUT_H (0x3B) in a single I2C transaction
 - Byte order: ax_H, ax_L, ay_H, ay_L, az_H, az_L, temp_H, temp_L, gx_H, gx_L, gy_H, gy_L, gz_H, gz_L
 - Discard temperature bytes (bytes 6–7)
@@ -184,11 +223,16 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 - Record per-AP: mean distance (m), standard deviation (m), RSSI (dBm), band (2.4/5 GHz)
 - Pack into RTT BLE packet (Type 0x02, see Section 15)
 
-### 6.3 BLE Transmission
+### 6.3 Wi-Fi Transmission (Direct — Primary and Only Path)
 
-- Transmit packets as BLE 5.0 advertisements
-- Do not require AP pairing; APs receive in passive scan mode
-- Alternate between IMU and RTT packets as appropriate to cycle rates
+- On startup: connect to SSID `QU-User` using stored credentials (MAC `24:42:E3:15:E5:72`)
+- Wait for `WL_CONNECTED` before beginning transmission (timeout 15 s; retry every 30 s on failure)
+- **IMU packets:** batch 25 samples (250 ms), encode as base64, POST to `https://trakn.duckdns.org/api/v1/gateway/packet` every 250 ms
+- **RTT packets:** POST immediately when ranging cycle completes (≥2 Hz)
+- Header: `X-API-Key: <baked-in key>`, `Content-Type: application/json`
+- Body format: direct device POST (Section 14.2)
+- On POST failure: retry once after 500 ms; buffer locally up to 30 s; flush on reconnect with original timestamps
+- On Wi-Fi disconnect: attempt reconnect every 5 s; buffer data locally during outage
 
 ---
 
@@ -208,7 +252,7 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 
 | Module | File | Responsibility |
 |---|---|---|
-| Gateway | `backend/app/api/gateway.py` | Receive packets from AP BLE gateway |
+| Gateway | `backend/app/api/gateway.py` | Receive packets from device direct Wi-Fi POST |
 | Parent | `backend/app/api/parent.py` | REST endpoints for parent app |
 | WebSocket | `backend/app/api/websocket.py` | Real-time position push |
 | Admin | `backend/app/api/admin.py` | Calibration data management |
@@ -219,26 +263,35 @@ One-sided Wi-Fi RTT ranging against existing infrastructure access points, fused
 |---|---|---|
 | Config | `backend/app/core/config.py` | Environment-based settings |
 | Security | `backend/app/core/security.py` | JWT auth + gateway API key |
-| BLE Parser | `backend/app/core/ble_parser.py` | Decode raw BLE packet bytes |
+| Packet Parser | `backend/app/core/ble_parser.py` | Decode raw packet bytes from base64 payload |
 
 ### 7.4 Processing Pipeline (per incoming packet)
 
+The gateway endpoint receives packets from the device via direct Wi-Fi POST.
+
 ```
-HTTP POST received
+HTTPS POST received  (device direct Wi-Fi)
       ↓
 Authenticate API key (reject 401 if invalid)
       ↓
-Decode base64 payload
+Decode base64 payload_b64
       ↓
-Parse BLE packet (IMU or RTT type byte)
+Parse packet type byte
+  → 0x01 IMU:  parse IMU fields
+  → 0x02 RTT:  parse RTT fields
+  → unknown:   return 400
       ↓
-[If RTT] Apply per-AP offset correction
+[If RTT]  Apply per-AP offset correction
       ↓
-[If RTT] Run Bayesian grid update
+[If RTT]  Run Bayesian grid update
       ↓
 EKF predict (IMU) or EKF predict+update (RTT)
       ↓
-Determine operating mode (normal / degraded / imu_only)
+Determine operating mode based on RTT AP count:
+  ≥2 APs → normal
+  1 AP   → degraded
+  0 APs  → imu_only
+  No data >5 s → disconnected
       ↓
 Persist to PostgreSQL
       ↓
@@ -254,16 +307,19 @@ Publish position via WebSocket
 Based on Horn (2022), the observation model accounts for the systematic positive bias introduced by one-sided RTT when the AP cannot respond instantaneously.
 
 **Mean function:**
+
 ```
 μ(x) = x · [1 + A · α · (x − x₀) · exp(−α · (x − x₀))]
 ```
 
 **Standard deviation function:**
+
 ```
 σ(x) = σ₀ + σ_m · (x − x₀) · exp(−β · (x − x₀))
 ```
 
 **Likelihood:**
+
 ```
 p(y | x) = N(y; μ(x), σ(x)²)
 ```
@@ -303,22 +359,26 @@ Expected offset magnitude: 2400–2700 m (5 GHz), ~1500 m (2.4 GHz legacy). Actu
 **State vector:** `x = [p_x, p_y, v_x, v_y]ᵀ`
 
 **Initial covariance:**
+
 ```
 P₀ = diag([25, 25, 4, 4])
 ```
 
 **Process noise:**
+
 ```
 Q = diag([0.01, 0.01, 0.1, 0.1])
 ```
 
 **Measurement noise:**
+
 ```
 R_normal   = diag([9.0, 9.0])     (σ_wifi = 3.0 m, ≥2 APs active)
 R_degraded = diag([18.0, 18.0])   (σ_wifi = 6.0 m, <2 APs active)
 ```
 
 **Predict step (IMU-driven):**
+
 ```
 x̂ = F·x + B·[ax, ay]ᵀ
 P̂ = F·P·Fᵀ + Q
@@ -330,6 +390,7 @@ F = [[1, 0, dt, 0],     B = [[0.5·dt², 0      ],
 ```
 
 **Update step (Bayesian MAP as measurement):**
+
 ```
 H = [[1, 0, 0, 0],
      [0, 1, 0, 0]]
@@ -390,10 +451,12 @@ Uses a rolling window of 0.40 s with adaptive peak and swing thresholds.
 | `th_swing_factor` | 0.9 | Swing threshold: 0.9 × std(window) |
 
 **False-step suppression (both conditions must pass before checking for a step):**
+
 - `std(window) >= 1.2` — reject if device appears stationary
 - `|mean(window) − 9.8| >= 0.4 m/s²` — reject if acceleration is near-gravity flat
 
 **Step validity (all three must be true):**
+
 ```
 (t − last_step_t) > min_step_dt
 AND  max(window) > median(window) + 2 · std(window)
@@ -405,6 +468,7 @@ AND  (max(window) − min(window)) > 0.9 · std(window)
 Two methods run in parallel. If a trained SVR model is available, they are blended 50/50. If no model is available, Weinberg is used alone.
 
 **Weinberg model (always computed):**
+
 ```
 L_wein = K_wein · (a_max − a_min)^p_wein
 
@@ -413,6 +477,7 @@ p_wein = 0.25      (Weinberg exponent)
 ```
 
 **Stride length clamps:**
+
 ```
 min_stride = 0.25 m
 max_stride = 1.40 m
@@ -420,6 +485,7 @@ SVR output is additionally clamped to [0.45, 0.90] m before blending
 ```
 
 **Hybrid blend (when SVR model is loaded):**
+
 ```
 stride = 0.5 · L_wein + 0.5 · L_svr
 ```
@@ -441,6 +507,7 @@ On each detected step, compute a 20-bin normalized histogram of the acceleration
 | Total bins `M` | 20 |
 
 **Bin edge construction:**
+
 ```python
 # Bins below gravity (logarithmically spaced):
 E[i] = 9.8 * (0.5 * Kbin) ** ((Ml + 1 - i) / Ml)   for i in 1..Ml
@@ -458,6 +525,7 @@ E[i] = 9.8 + (amax - 9.8) * (i - Ml - 1) / Mh        for i in Ml+1..M
 The SVR model is trained on labeled walk data (ground-truth distance → average stride label per step). It is persisted as `stride_svr.pkl` in `backend/app/fusion/`.
 
 **Model spec:**
+
 - Algorithm: `sklearn.svm.SVR` with RBF (Gaussian) kernel, `kernel_scale='auto'`, standardized features
 - Input: 20-bin histogram feature vector (normalized)
 - Output: stride length in meters
@@ -465,6 +533,7 @@ The SVR model is trained on labeled walk data (ground-truth distance → average
 - Retraining: append new walk data, retrain from scratch on combined dataset, overwrite `stride_svr.pkl`
 
 **Training data schema (`stride_training_data.json`):**
+
 ```json
 { "X": [[...20 floats...], ...], "y": [0.62, 0.58, ...] }
 ```
@@ -472,6 +541,7 @@ The SVR model is trained on labeled walk data (ground-truth distance → average
 #### 8.5.8 Position Update
 
 On each accepted step:
+
 ```
 X += stride · cos(θ)
 Y += stride · sin(θ)
@@ -482,6 +552,7 @@ This 2D dead-reckoning position feeds into the EKF as the IMU-only position esti
 ### 8.6 Fusion Coordinator
 
 The coordinator is an async loop that:
+
 1. Receives parsed IMU data → calls EKF predict
 2. Receives parsed RTT data → runs offset correction → runs Bayesian update → calls EKF update with Bayesian MAP
 3. Determines operating mode based on AP count and device activity
@@ -548,6 +619,7 @@ RTT measurements from one-sided FTM contain a systematic per-AP, per-band offset
 ### 10.3 Calibration Quality Gate
 
 An AP calibration entry is flagged as unreliable and excluded from Bayesian updates if:
+
 - Standard deviation of calibration measurements > 20 m
 - Fewer than 30 measurements were collected
 
@@ -582,19 +654,23 @@ All requirements are mandatory. If an implementation cannot meet a target, repor
 
 ### 12.1 Operating Modes
 
+Operating mode is determined solely by how many APs returned RTT measurements in the most recent ranging cycle. Transport path (GSM or BLE) does not affect the mode — both paths deliver RTT data.
+
 | Mode | Trigger Condition | EKF Behavior | WebSocket `mode` Value |
 |---|---|---|---|
 | `normal` | ≥ 2 APs responding, IMU active | predict + update with R_normal | `"normal"` |
 | `degraded` | Exactly 1 AP responding | predict + update with R_degraded | `"degraded"` |
-| `imu_only` | 0 APs responding | predict only, no Bayesian update | `"imu_only"` |
+| `imu_only` | 0 APs responding (no RTT data) | predict only, no Bayesian update | `"imu_only"` |
 | `disconnected` | No device data for > 5 s | All processing suspended | `"disconnected"` |
 
 ### 12.2 Special Recovery Cases
 
 - **Bayesian grid collapse** (probability sum < 1e-10): reset prior to uniform over walkable cells, log event, continue without crashing.
 - **EKF divergence** (|pos_EKF − pos_Bayes| > 10 m for > 5 cycles): reset EKF state to Bayesian MAP position, zero velocities, reset P to P₀.
-- **ZUPT** (|a| < 0.05 m/s² for > 2 s): set v_x = v_y = 0 in EKF state and estimate accelerometer bias.
+- **ZUPT** (|a| < 0.05 m/s² for > 2 s): set v_x = v_y = 0 in EKF state.
 - **AP drops out mid-session**: remove from active AP list, recalculate mode, continue.
+- **Wi-Fi POST failure**: device buffers locally up to 30 s; flushes with original timestamps on reconnect; server processes in timestamp order.
+- **Wi-Fi disconnect**: device retries connection every 5 s; buffers data during outage; resumes transmission on reconnect.
 - **WebSocket client disconnects**: server buffers last position; client reconnects and receives latest state immediately.
 
 ---
@@ -604,6 +680,7 @@ All requirements are mandatory. If an implementation cannot meet a target, repor
 Seven tables. Schema defined in `backend/app/db/models.py`. Do not add columns or change types without creating a migration.
 
 ### `devices`
+
 ```sql
 device_id    UUID PRIMARY KEY DEFAULT gen_random_uuid()
 mac_address  VARCHAR(17) UNIQUE NOT NULL        -- "AA:BB:CC:DD:EE:FF"
@@ -614,6 +691,7 @@ is_active    BOOLEAN NOT NULL DEFAULT TRUE
 ```
 
 ### `device_links`
+
 ```sql
 link_id      UUID PRIMARY KEY DEFAULT gen_random_uuid()
 device_id    UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE
@@ -622,6 +700,7 @@ linked_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 
 ### `access_points`
+
 ```sql
 ap_id        UUID PRIMARY KEY DEFAULT gen_random_uuid()
 bssid        VARCHAR(17) UNIQUE NOT NULL
@@ -634,6 +713,7 @@ created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 ```
 
 ### `ap_calibration`
+
 ```sql
 cal_id       UUID PRIMARY KEY DEFAULT gen_random_uuid()
 ap_id        UUID NOT NULL REFERENCES access_points(ap_id) ON DELETE CASCADE
@@ -646,6 +726,7 @@ is_reliable  BOOLEAN NOT NULL DEFAULT TRUE
 ```
 
 ### `imu_samples`
+
 ```sql
 sample_id    UUID PRIMARY KEY DEFAULT gen_random_uuid()
 device_id    UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE
@@ -661,6 +742,7 @@ seq          SMALLINT NOT NULL
 ```
 
 ### `rtt_measurements`
+
 ```sql
 meas_id      UUID PRIMARY KEY DEFAULT gen_random_uuid()
 device_id    UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE
@@ -675,6 +757,7 @@ band         VARCHAR(10) NOT NULL
 ```
 
 ### `position_estimates`
+
 ```sql
 pos_id       UUID PRIMARY KEY DEFAULT gen_random_uuid()
 device_id    UUID NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE
@@ -691,20 +774,32 @@ mode         VARCHAR(20) NOT NULL
 
 ## 14. API Contracts
 
-### 14.1 Gateway → Server (AP POST body)
+### 14.1 Gateway Endpoint
+
+Device POSTs directly to:
+
+```
+POST https://trakn.duckdns.org/api/v1/gateway/packet
+Header: X-API-Key: <gateway_api_key>
+Header: Content-Type: application/json
+```
+
+### 14.2 Device Direct POST Body
+
+Sent by the BW16 over venue Wi-Fi:
 
 ```json
 {
-  "ap_bssid":    "AA:BB:CC:DD:EE:FF",
-  "ap_rssi_ble": -65,
+  "device_mac":  "24:42:E3:15:E5:72",
   "rx_ts_utc":   "2026-02-27T10:15:30.123Z",
-  "payload_b64": "<base64-encoded BLE packet bytes>"
+  "payload_b64": "<base64-encoded packet bytes — IMU 0x01 or RTT 0x02>"
 }
 ```
 
-Authentication: `X-API-Key: <gateway_api_key>` header.
+Both IMU (0x01) and RTT (0x02) packets use this same body format.
+`device_mac` is used to look up the registered device in the database.
 
-### 14.2 Server → App (WebSocket position message)
+### 14.3 Server → App (WebSocket Position Message)
 
 ```json
 {
@@ -720,18 +815,19 @@ Authentication: `X-API-Key: <gateway_api_key>` header.
 ```
 
 `mode` values: `"normal"` | `"degraded"` | `"imu_only"` | `"disconnected"`
+`source` values: `"fused"` | `"wifi_only"` | `"imu_only"`
 
-### 14.3 Parent REST Endpoints
+### 14.4 Parent REST Endpoints
 
 ```
-POST   /api/v1/auth/login           → JWT token
-GET    /api/v1/devices              → list linked devices
-GET    /api/v1/devices/{id}/position → last known position
-GET    /api/v1/health               → system health status
-WS     /ws/position/{device_id}     → real-time position stream
+POST   /api/v1/auth/login              → JWT token
+GET    /api/v1/devices                 → list linked devices
+GET    /api/v1/devices/{id}/position   → last known position
+GET    /api/v1/health                  → system health status
+WS     /ws/position/{device_id}        → real-time position stream
 ```
 
-### 14.4 Health Response
+### 14.5 Health Response
 
 ```json
 {
@@ -805,16 +901,16 @@ services:
 DATABASE_URL=postgresql+asyncpg://user:pass@db:5432/localization
 SECRET_KEY=<random 64-char hex>
 GATEWAY_API_KEY=<random 32-char hex>
-ALLOWED_ORIGINS=https://your-domain.com
+ALLOWED_ORIGINS=https://trakn.duckdns.org
 ```
 
-### 16.3 What to Give the IT Team
+### 16.3 What to Give the Venue IT Team
 
-- Server public IP address
-- Port: 443 (HTTPS)
-- Endpoint: `POST https://<ip>/api/v1/gateway/packet`
-- Header: `X-API-Key: <gateway_api_key>`
-- Request body: JSON per Section 14.1
+- Device Wi-Fi MAC address: `24:42:E3:15:E5:72`
+- Network to register on: `QU-User` (internet access only)
+- Access type: outbound HTTPS to 35.238.189.188 port 443 only
+- Duration: semester duration (~3 months)
+- **Status:** Completed — QU IT confirmed registration on 4 March 2026 (contact: Ajay)
 
 ### 16.4 File Structure
 
@@ -833,7 +929,7 @@ project-root/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── firmware/
-│   └── bw16/             imu_reader.ino, rtt_ranger.ino, ble_transmitter.ino,
+│   └── bw16/             imu_reader.ino, rtt_ranger.ino, wifi_transmitter.ino,
 │                         packet_format.h
 ├── app/
 │   └── lib/              screens/, services/, models/
@@ -853,7 +949,7 @@ project-root/
 │   ├── test_admin_endpoints.py
 │   ├── test_health.py
 │   ├── test_grid_loader.py
-│   └── integration/      test_full_pipeline.py, test_failure_modes.py
+│   └── integration/      test_full_pipeline.py, test_failure_modes.py,
 ├── tasks.json
 ├── progress.txt
 ├── docker-compose.yml
@@ -868,6 +964,7 @@ project-root/
 ### 17.1 Coverage
 
 Minimum 80% line coverage across `backend/app/`. Run with:
+
 ```bash
 pytest --cov=backend/app --cov-fail-under=80 --tb=short -q
 ```
@@ -892,7 +989,7 @@ Examples: `test_parse_imu_packet_valid`, `test_ekf_update_divergence_reset`, `te
 
 ## 18. Implementation Plan
 
-Twenty tasks across 8 phases. Full details in `tasks.json`.
+Twenty-one tasks across 9 phases. Full details in `tasks.json`.
 
 | ID | Title | Owner | Phase |
 |---|---|---|---|
@@ -901,21 +998,22 @@ Twenty tasks across 8 phases. Full details in `tasks.json`.
 | TASK-03 | PostgreSQL schema and SQLAlchemy models | person-a | 1 — Scaffolding |
 | TASK-04 | Configuration and security core | person-a | 1 — Scaffolding |
 | TASK-05 | BLE packet parser | person-b | 2 — Protocol |
-| TASK-05B | BW16 firmware — IMU reader port from Arduino/MATLAB to BW16+MPU6050 | person-b | 2 — Protocol |
-| TASK-06 | Gateway API endpoints | person-b | 2 — Protocol |
+| TASK-05B | BW16 firmware — IMU reader port to BW16+MPU6050 | person-b | 2 — Protocol |
+| TASK-05C | BW16 firmware — Wi-Fi transmitter (direct HTTPS POST, IMU + RTT) | person-b | 2 — Protocol |
+| TASK-06 | Gateway API endpoint — single direct POST path | person-b | 2 — Protocol |
 | TASK-07 | Offset correction engine | person-a | 3 — Calibration |
 | TASK-08 | Calibration admin endpoints | person-a | 3 — Calibration |
 | TASK-09 | Floor plan grid loader | person-c | 4 — Bayesian Grid |
 | TASK-10 | Observation model implementation | person-c | 4 — Bayesian Grid |
 | TASK-11 | Bayesian grid update engine | person-c | 4 — Bayesian Grid |
 | TASK-12 | EKF predict and update steps | person-c | 5 — EKF Fusion |
-| TASK-12B | PDR Python module (`pdr.py`) — full MATLAB algorithm migration | person-c | 5 — EKF Fusion |
-| TASK-13 | Fusion coordinator async loop | person-c | 5 — EKF Fusion |
+| TASK-12B | PDR Python module — MATLAB migration | person-c | 5 — EKF Fusion |
+| TASK-13 | Fusion coordinator — unified fusion pipeline | person-c | 5 — EKF Fusion |
 | TASK-14 | WebSocket broadcaster | person-d | 6 — Real-time API |
 | TASK-15 | Parent REST API endpoints | person-d | 6 — Real-time API |
 | TASK-16 | Flutter project setup and WebSocket service | person-d | 7 — Mobile App |
 | TASK-17 | Flutter live map screen | person-d | 7 — Mobile App |
-| TASK-18 | Full integration test pipeline | person-b | 8 — Integration |
+| TASK-18 | Full integration test pipeline (direct Wi-Fi path) | person-b | 8 — Integration |
 | TASK-19 | Health check and monitoring endpoint | person-a | 8 — Integration |
 | TASK-20 | Final validation and cleanup | person-d | 8 — Integration |
 
@@ -936,8 +1034,7 @@ These are unresolved. Any agent implementation touching these areas must stop an
 | ID | Question | Impact |
 |---|---|---|
 | OQ-01 | Does the BW16 Realtek SDK expose per-BSSID one-sided FTM RTT with burst control? | Critical — determines feasibility of RTT on BW16 |
-| OQ-02 | What BLE gateway protocol do QU APs support? (HTTP webhook / MQTT / Cisco CMX / Aruba ALE) | Critical — determines gateway POST format |
-| OQ-03 | Exact AP (x, y, z) coordinates in H07-C confirmed by IT? | High — required for offset calibration |
+| OQ-03 | AP (x, y, z) coordinates in H07-C — IT confirmed no floor plan drawings available. Manual survey required. | High — required for offset calibration. Team must walk corridor and record AP positions manually. |
 | OQ-04 | Do QU APs support 40/80 MHz bandwidth for RTT, or 20 MHz only? | Medium — affects accuracy estimates |
 | OQ-05 | Which QU APs in H07-C are in DFS 5 GHz band? | Medium — DFS APs must be excluded |
 
