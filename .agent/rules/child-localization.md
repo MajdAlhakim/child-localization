@@ -14,8 +14,8 @@ trigger: always_on
 ## 1. Project Identity
 
 Real-time child indoor localization system for Qatar University Building H07, C Corridor.
-Stack: BW16 firmware (IMU + one-sided Wi-Fi RTT) → BLE → AP BLE gateway → HTTP POST →
-Cloud-hosted FastAPI server → EKF + Bayesian grid fusion → WebSocket → Flutter parent app.
+Stack: BW16 wearable (IMU + one-sided Wi-Fi RTT) → QU-USER Wi-Fi → HTTPS POST →
+Cloud FastAPI server (trakn.duckdns.org:443) → EKF + Bayesian grid fusion → WebSocket → Flutter parent app.
 
 Full specification: see `PRD.md` in the repository root.
 
@@ -81,7 +81,7 @@ Step 9.  IF push is rejected (exit code non-zero):
 | Laptop | Owner identity | Tasks | Files (write access) |
 |---|---|---|---|
 | A | `person-a` | TASK-02,03,04,07,08,19 | `backend/app/db/*`, `backend/app/core/config.py`, `backend/app/core/security.py`, `backend/app/api/admin.py`, `docker-compose.yml`, `Dockerfile`, `backend/requirements.txt` |
-| B | `person-b` | TASK-05,05B,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/bw16/*` |
+| B | `person-b` | TASK-05,05B,05C,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/bw16/*` |
 | C | `person-c` | TASK-09,10,11,12,12B,13 | `backend/app/fusion/*` (includes `pdr.py`, `stride_svr.pkl`, `stride_training_data.json`) |
 | D | `person-d` | TASK-14,15,16,17,20 | `backend/app/api/websocket.py`, `backend/app/api/parent.py`, `app/lib/*` |
 | All | `shared` | TASK-01 | Project scaffold |
@@ -98,7 +98,7 @@ Reading files outside your scope is permitted. Writing outside your scope is not
 | Backend | FastAPI + asyncpg + SQLAlchemy 2.0 async | Flask, Django, sync SQLAlchemy |
 | Fusion | EKF 4-state [px, py, vx, vy] | Particle filter, pure Bayesian only |
 | Mobile | Flutter (Android 12 primary) | React Native, native Android/iOS |
-| Device→Server path | BLE → AP gateway → HTTP POST to cloud VM | Direct Wi-Fi from BW16, university LAN hosting |
+| Device→Server path | BW16 → direct Wi-Fi POST to cloud VM (QU-USER SSID) | BLE gateway relay, university LAN hosting |
 | Server hosting | Cloud VM with public IP | Hosting on university network |
 | AP selection | Time-last-seen (primary) | RSSI-only, distance-only |
 | Grid cell size | 0.5 m × 0.5 m | Any other cell size |
@@ -168,10 +168,10 @@ RTT (0x02) — variable, little-endian:
 
 ## 8. API Contracts (Locked Wire Formats)
 
-**Gateway POST body (AP → server):**
+**Gateway POST body (BW16 → server, direct Wi-Fi):**
 
 ```json
-{ "ap_bssid": "AA:BB:CC:DD:EE:FF", "ap_rssi_ble": -65,
+{ "device_mac": "24:42:E3:15:E5:72",
   "rx_ts_utc": "2026-02-27T10:15:30.123Z", "payload_b64": "<base64>" }
 ```
 
@@ -239,7 +239,7 @@ EKF divergence (> 10 m for > 5 cycles): reset state from Bayesian MAP, P = P₀.
 ## 12. Open Questions — Stop and Flag if Your Code Touches These
 
 - **OQ-01:** Does BW16 Realtek SDK expose per-BSSID one-sided FTM RTT with burst control?
-- **OQ-02:** What BLE gateway protocol do QU APs support? (HTTP webhook / MQTT / Cisco CMX)
+- ~~**OQ-02:** What BLE gateway protocol do QU APs support?~~ **CLOSED** — BLE gateway not required; direct Wi-Fi used.
 - **OQ-03:** Exact AP (x, y, z) coordinates in H07-C — not yet confirmed from IT
 - **OQ-04:** QU AP bandwidth — 20 MHz confirmed; 40/80 MHz availability unknown
 - **OQ-05:** Which QU APs are in DFS 5 GHz band — list not yet obtained
