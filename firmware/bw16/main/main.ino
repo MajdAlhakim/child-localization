@@ -1,6 +1,43 @@
-﻿// firmware/bw16/ble_transmitter.ino  (renamed role: Wi-Fi direct transmitter)
-// BW16 Wi-Fi HTTPS transmitter — TASK-05C
+// firmware/bw16/main/main.ino
+// BW16 (Realtek RTL8720DN) — Unified sketch
+// All three subsystems compiled and flashed together:
+//   1. IMU reader       — TASK-05B (person-b, pending)
+//   2. Wi-Fi RTT ranger — TASK-05B (person-b, pending)
+//   3. Wi-Fi HTTPS sender — TASK-05C (person-b, implemented below)
 //
+// Flashing this sketch overwrites the entire device.
+// Never flash subsystem files individually — they do not exist separately.
+
+#include <WiFiClient.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include "Base64.h"           // Arduino Base64 library
+#include "packet_format.h"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUBSYSTEM 1 — IMU READER (TASK-05B — placeholder, person-b to implement)
+// MPU6050 at I2C address 0x68, 400 kHz
+// Register config: PWR_MGMT_1=0x00, GYRO_CONFIG=0x08, ACCEL_CONFIG=0x08, CONFIG=0x04
+// Accel: raw × 0.0011978149 m/s²    Gyro: raw × 0.0002663309 rad/s
+// Sampling: 100 Hz (10 ms loop), read 14 bytes in one I2C burst from 0x3B
+// Output: Type 0x01 IMU packet packed into imu_packet buffer
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// placeholder — implement in TASK-05B
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUBSYSTEM 2 — WI-FI RTT RANGER (TASK-05B — placeholder, person-b to implement)
+// One-sided Wi-Fi RTT per AP BSSID using Realtek SDK
+// Output: Type 0x02 RTT packet packed into rtt_packet buffer
+// OQ-01: confirm Realtek SDK exposes per-BSSID one-sided FTM RTT before implementing
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// placeholder — implement in TASK-05B
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SUBSYSTEM 3 — WI-FI HTTPS SENDER (TASK-05C — implemented)
 // Connects BW16 to QU-User Wi-Fi (MAC 24:42:E3:15:E5:72 registered by IT).
 // POSTs IMU (0x01) and RTT (0x02) packets to the cloud server via HTTPS on port 443.
 //
@@ -12,12 +49,7 @@
 //
 // On POST failure: retry once after 500 ms.
 // On Wi-Fi disconnect: reconnect every 5 s; buffer locally during outage.
-
-#include <WiFiClient.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include "Base64.h"        // Arduino Base64 library
-#include "packet_format.h"
+// ═══════════════════════════════════════════════════════════════════════════════
 
 // ── Wi-Fi credentials ─────────────────────────────────────────────────────────
 static const char* WIFI_SSID = "QU-User";
@@ -92,14 +124,12 @@ static void ensure_wifi() {
     unsigned long now = millis();
     if (now - _last_wifi_attempt < 5000) return;
     _last_wifi_attempt = now;
-    Serial.println("[WiFi] Reconnecting…");
+    Serial.println("[WiFi] Reconnecting...");
     WiFi.disconnect();
     WiFi.begin(WIFI_SSID, WIFI_PASS);
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
-void wifi_transmitter_setup() {
+static void wifi_sender_setup() {
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     Serial.print("[WiFi] Connecting to ");
     Serial.println(WIFI_SSID);
@@ -115,8 +145,8 @@ void wifi_transmitter_setup() {
     }
 }
 
-// Call this from the main loop with a fully-formed BLE packet (IMU or RTT).
-void wifi_transmitter_send(const uint8_t* pkt, uint16_t len) {
+// Call this from the main loop with a fully-formed IMU or RTT packet.
+static void wifi_sender_send(const uint8_t* pkt, uint16_t len) {
     ensure_wifi();
 
     // Flush any buffered packets first (oldest first)
@@ -138,4 +168,22 @@ void wifi_transmitter_send(const uint8_t* pkt, uint16_t len) {
             buf_push(pkt, len);  // buffer for later
         }
     }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ARDUINO ENTRY POINTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void setup() {
+    Serial.begin(115200);
+    // TODO (TASK-05B): imu_setup();
+    // TODO (TASK-05B): rtt_setup();
+    wifi_sender_setup();
+}
+
+void loop() {
+    // TODO (TASK-05B): read IMU, pack Type 0x01 packet, call wifi_sender_send()
+    // TODO (TASK-05B): run RTT ranging, pack Type 0x02 packet, call wifi_sender_send()
+    delay(10);  // 100 Hz loop placeholder
 }
