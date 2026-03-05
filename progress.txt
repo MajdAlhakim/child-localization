@@ -127,3 +127,7 @@ OPEN QUESTIONS (current)
 ================================================================================
 END OF LOG
 ================================================================================
+DONE [TASK-05] (person-b): ble_parser.py — parse() binary IMU/RTT packets, struct little-endian, 37 tests pass — 2026-03-05T01:20:00Z
+DONE [TASK-05B] (person-b): BW16 firmware IMU+RTT subsystems in main.ino — MPU6050 100Hz, locked conversions, Type 0x01 packing; RTT stub (OQ-01) — 2026-03-05T01:20:00Z
+DONE [TASK-05C] (person-b): BW16 firmware Wi-Fi HTTPS sender — connects QU-User, base64 encodes, POSTs to trakn.duckdns.org with X-API-Key, local buffer for outages — 2026-03-05T01:20:00Z
+DONE [TASK-06] (person-b): gateway.py POST /api/v1/gateway/packet — X-API-Key auth, base64 decode, parser dispatch, DB persist, coordinator forward; 15 tests pass — 2026-03-05T01:20:00Z
