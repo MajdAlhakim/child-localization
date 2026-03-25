@@ -1,4 +1,4 @@
-﻿"""
+"""
 tests/test_gateway_endpoints.py
 
 Full test suite for the POST /api/v1/gateway/packet endpoint.
@@ -8,22 +8,23 @@ Uses:
   - SQLite in-memory engine (no PostgreSQL needed)
   - FastAPI test app wired to the gateway router
 
+Wire format: JSON (ESP32-C5 firmware — see firmware/esp32c5/trakn_tag/trakn_tag.ino)
+
 Tests cover:
-  - Valid IMU packet POST → 202 Accepted, packet_type=1
-  - Valid RTT packet POST → 202 Accepted, packet_type=2
+  - Valid packet with IMU samples → 202 Accepted
+  - Valid packet with IMU + WiFi → 202 Accepted, correct counts
+  - Valid packet with empty wifi array → 202 Accepted
+  - Response body fields: status, imu_count, wifi_count, device_mac
+  - Same device MAC across multiple requests → no duplicate Device rows
   - Missing X-API-Key header → 401
   - Wrong X-API-Key value → 401
-  - Malformed base64 payload → 400
-  - Unknown packet type byte → 400 (ValueError from parser, not 500)
-  - Malformed JSON body → 422 (Pydantic validation)
-  - Invalid MAC format → 422
+  - Malformed JSON body → 422
+  - Missing required field (mac) → 422
+  - Empty imu array → 202 Accepted (wifi-only packet is valid)
 """
 
 from __future__ import annotations
 
-import base64
-import struct
-from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 import pytest
@@ -84,60 +85,29 @@ async def client(db_engine) -> AsyncGenerator[AsyncClient, None]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Packet builders (mirror the test_ble_parser.py helpers)
+# Packet builders matching the ESP32-C5 JSON wire format
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _mac_bytes(mac_str: str = "24:42:E3:15:E5:72") -> bytes:
-    return bytes(int(x, 16) for x in mac_str.split(":"))
+def make_imu_sample(ts: int = 1000) -> dict:
+    return {"ts": ts, "ax": 0.1, "ay": 0.2, "az": 9.81,
+            "gx": 0.0, "gy": 0.0, "gz": 0.01}
 
 
-def build_imu_bytes(
+def make_wifi_ap(bssid: str = "AA:BB:CC:11:22:33", rssi: int = -65, ch: int = 6) -> dict:
+    return {"bssid": bssid, "ssid": "QU User", "rssi": rssi, "ch": ch}
+
+
+def make_packet(
     mac: str = "24:42:E3:15:E5:72",
-    ts_ms: int = 1000,
-    ax: float = 0.1, ay: float = 0.2, az: float = 9.81,
-    gx: float = 0.0, gy: float = 0.0, gz: float = 0.01,
-    seq: int = 1,
-) -> bytes:
-    buf = bytearray(40)
-    buf[0] = 0x01
-    buf[1:7] = _mac_bytes(mac)
-    struct.pack_into("<Q", buf, 7, ts_ms)
-    struct.pack_into("<ffffff", buf, 15, ax, ay, az, gx, gy, gz)
-    buf[39] = seq & 0xFF
-    return bytes(buf)
-
-
-def build_rtt_bytes(
-    mac: str = "24:42:E3:15:E5:72",
-    ts_ms: int = 2000,
-    aps: list | None = None,
-) -> bytes:
-    aps = aps or []
-    n = len(aps)
-    buf = bytearray(16 + n * 16)
-    buf[0] = 0x02
-    buf[1:7] = _mac_bytes(mac)
-    struct.pack_into("<Q", buf, 7, ts_ms)
-    buf[15] = n
-    for i, (bssid_str, d_mean, d_std, rssi, band) in enumerate(aps):
-        off = 16 + i * 16
-        buf[off:off+6] = _mac_bytes(bssid_str)
-        struct.pack_into("<f", buf, off+6, d_mean)
-        struct.pack_into("<f", buf, off+10, d_std)
-        struct.pack_into("<b", buf, off+14, rssi)
-        buf[off+15] = band
-    return bytes(buf)
-
-
-def b64(data: bytes) -> str:
-    return base64.b64encode(data).decode()
-
-
-def valid_body(payload_b64: str, mac: str = "24:42:E3:15:E5:72") -> dict:
+    ts: int = 12450,
+    imu: list | None = None,
+    wifi: list | None = None,
+) -> dict:
     return {
-        "device_mac": mac,
-        "rx_ts_utc": "2026-03-05T00:00:00.000Z",
-        "payload_b64": payload_b64,
+        "mac": mac,
+        "ts": ts,
+        "imu": imu if imu is not None else [make_imu_sample()],
+        "wifi": wifi if wifi is not None else [],
     }
 
 
@@ -150,10 +120,9 @@ GOOD_HEADERS = {"X-API-Key": TEST_API_KEY}
 
 @pytest.mark.asyncio
 async def test_valid_imu_returns_202(client: AsyncClient):
-    payload = b64(build_imu_bytes())
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(),
         headers=GOOD_HEADERS,
     )
     assert resp.status_code == 202
@@ -161,63 +130,89 @@ async def test_valid_imu_returns_202(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_valid_imu_response_body(client: AsyncClient):
-    payload = b64(build_imu_bytes())
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(imu=[make_imu_sample(1000), make_imu_sample(1010)]),
         headers=GOOD_HEADERS,
     )
     data = resp.json()
     assert data["status"] == "accepted"
-    assert data["packet_type"] == 1
+    assert data["imu_count"] == 2
+    assert data["wifi_count"] == 0
     assert data["device_mac"] == "24:42:E3:15:E5:72"
 
 
 @pytest.mark.asyncio
-async def test_valid_rtt_returns_202(client: AsyncClient):
-    aps = [("AA:BB:CC:11:22:33", 5.0, 0.5, -65, 0x01)]
-    payload = b64(build_rtt_bytes(aps=aps))
+async def test_valid_imu_and_wifi_returns_202(client: AsyncClient):
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(
+            imu=[make_imu_sample()],
+            wifi=[make_wifi_ap("AA:BB:CC:11:22:33"), make_wifi_ap("DD:EE:FF:44:55:66")],
+        ),
         headers=GOOD_HEADERS,
     )
     assert resp.status_code == 202
-
-
-@pytest.mark.asyncio
-async def test_valid_rtt_response_body(client: AsyncClient):
-    aps = [("AA:BB:CC:11:22:33", 5.0, 0.5, -65, 0x01)]
-    payload = b64(build_rtt_bytes(aps=aps))
-    resp = await client.post(
-        "/api/v1/gateway/packet",
-        json=valid_body(payload),
-        headers=GOOD_HEADERS,
-    )
     data = resp.json()
-    assert data["packet_type"] == 2
+    assert data["imu_count"] == 1
+    assert data["wifi_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_rtt_zero_aps_accepted(client: AsyncClient):
-    """RTT packet with 0 AP records is valid (no APs in range)."""
-    payload = b64(build_rtt_bytes(aps=[]))
+async def test_empty_wifi_array_accepted(client: AsyncClient):
+    """Packet with empty wifi[] is valid (no scan available yet)."""
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(wifi=[]),
         headers=GOOD_HEADERS,
     )
     assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_empty_imu_array_accepted(client: AsyncClient):
+    """Packet with empty imu[] is accepted (wifi-only scan result)."""
+    resp = await client.post(
+        "/api/v1/gateway/packet",
+        json=make_packet(imu=[], wifi=[make_wifi_ap()]),
+        headers=GOOD_HEADERS,
+    )
+    assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_five_imu_samples_per_packet(client: AsyncClient):
+    """Firmware batches up to 5 IMU samples — all must be accepted."""
+    samples = [make_imu_sample(ts=1000 + i * 10) for i in range(5)]
+    resp = await client.post(
+        "/api/v1/gateway/packet",
+        json=make_packet(imu=samples),
+        headers=GOOD_HEADERS,
+    )
+    assert resp.status_code == 202
+    assert resp.json()["imu_count"] == 5
 
 
 @pytest.mark.asyncio
 async def test_same_device_mac_reused(client: AsyncClient):
-    """Two requests from the same MAC should not create duplicate Device rows."""
-    payload = b64(build_imu_bytes())
+    """Three requests from the same MAC must not create duplicate Device rows."""
     for _ in range(3):
         resp = await client.post(
             "/api/v1/gateway/packet",
-            json=valid_body(payload),
+            json=make_packet(),
+            headers=GOOD_HEADERS,
+        )
+        assert resp.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_same_bssid_reused(client: AsyncClient):
+    """Two packets referencing the same AP BSSID must not duplicate AccessPoint rows."""
+    ap = make_wifi_ap("AA:BB:CC:11:22:33")
+    for _ in range(2):
+        resp = await client.post(
+            "/api/v1/gateway/packet",
+            json=make_packet(wifi=[ap]),
             headers=GOOD_HEADERS,
         )
         assert resp.status_code == 202
@@ -229,10 +224,9 @@ async def test_same_device_mac_reused(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_missing_api_key_returns_401(client: AsyncClient):
-    payload = b64(build_imu_bytes())
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(),
         # No X-API-Key header
     )
     assert resp.status_code == 401
@@ -240,68 +234,12 @@ async def test_missing_api_key_returns_401(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_wrong_api_key_returns_401(client: AsyncClient):
-    payload = b64(build_imu_bytes())
     resp = await client.post(
         "/api/v1/gateway/packet",
-        json=valid_body(payload),
+        json=make_packet(),
         headers={"X-API-Key": "completely-wrong-key"},
     )
     assert resp.status_code == 401
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Tests — payload validation errors
-# ─────────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_malformed_base64_returns_400(client: AsyncClient):
-    body = valid_body("!!!not-valid-base64!!!")
-    resp = await client.post(
-        "/api/v1/gateway/packet",
-        json=body,
-        headers=GOOD_HEADERS,
-    )
-    assert resp.status_code == 400
-    assert "base64" in resp.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_unknown_type_byte_returns_400_not_500(client: AsyncClient):
-    """Unknown type byte from the parser must produce 400, not 500."""
-    bad_packet = bytes([0xAB]) + b"\x00" * 39
-    payload = b64(bad_packet)
-    resp = await client.post(
-        "/api/v1/gateway/packet",
-        json=valid_body(payload),
-        headers=GOOD_HEADERS,
-    )
-    assert resp.status_code == 400
-    assert "parse error" in resp.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_truncated_imu_returns_400(client: AsyncClient):
-    """Truncated IMU packet (too short) raises ValueError → 400."""
-    short_packet = build_imu_bytes()[:20]
-    payload = b64(short_packet)
-    resp = await client.post(
-        "/api/v1/gateway/packet",
-        json=valid_body(payload),
-        headers=GOOD_HEADERS,
-    )
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_empty_payload_returns_400(client: AsyncClient):
-    """Empty base64 payload decodes to empty bytes → ValueError → 400."""
-    payload = b64(b"")
-    resp = await client.post(
-        "/api/v1/gateway/packet",
-        json=valid_body(payload),
-        headers=GOOD_HEADERS,
-    )
-    assert resp.status_code == 400
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,13 +257,8 @@ async def test_malformed_json_body_returns_422(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_invalid_mac_format_returns_422(client: AsyncClient):
-    payload = b64(build_imu_bytes())
-    body = {
-        "device_mac": "ZZZZ",
-        "rx_ts_utc": "2026-03-05T00:00:00Z",
-        "payload_b64": payload,
-    }
+async def test_missing_mac_field_returns_422(client: AsyncClient):
+    body = {"ts": 12450, "imu": [make_imu_sample()], "wifi": []}
     resp = await client.post(
         "/api/v1/gateway/packet",
         json=body,
@@ -335,12 +268,34 @@ async def test_invalid_mac_format_returns_422(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_missing_payload_b64_field_returns_422(client: AsyncClient):
-    body = {
-        "device_mac": "24:42:E3:15:E5:72",
-        "rx_ts_utc": "2026-03-05T00:00:00Z",
-        # payload_b64 missing
-    }
+async def test_missing_imu_field_returns_422(client: AsyncClient):
+    body = {"mac": "24:42:E3:15:E5:72", "ts": 12450, "wifi": []}
+    resp = await client.post(
+        "/api/v1/gateway/packet",
+        json=body,
+        headers=GOOD_HEADERS,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_imu_sample_missing_ax_returns_422(client: AsyncClient):
+    """IMU sample with missing required field must fail Pydantic validation."""
+    bad_sample = {"ts": 1000, "ay": 0.2, "az": 9.81, "gx": 0.0, "gy": 0.0, "gz": 0.01}
+    body = make_packet(imu=[bad_sample])
+    resp = await client.post(
+        "/api/v1/gateway/packet",
+        json=body,
+        headers=GOOD_HEADERS,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_wifi_ap_missing_bssid_returns_422(client: AsyncClient):
+    """WiFi AP entry with missing bssid must fail Pydantic validation."""
+    bad_ap = {"ssid": "QU User", "rssi": -65, "ch": 6}
+    body = make_packet(wifi=[bad_ap])
     resp = await client.post(
         "/api/v1/gateway/packet",
         json=body,

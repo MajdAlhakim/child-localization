@@ -1,31 +1,31 @@
-﻿"""
+"""
 backend/app/api/gateway.py
 
 POST /api/v1/gateway/packet — Device gateway endpoint.
 
-Receives direct HTTPS POSTs from the BW16 wearable device (over QU-User Wi-Fi).
-Authenticates via X-API-Key header, base64-decodes the binary payload,
-routes to the packet parser, persists to the database, and forwards to the
-fusion coordinator.
+Receives direct HTTPS POSTs from the XIAO ESP32-C5 wearable (over QU-User Wi-Fi).
+Authenticates via X-API-Key header, parses the JSON body, persists IMU samples and
+Wi-Fi RSSI observations to the database, and forwards IMU data to the fusion coordinator.
 
-Wire format: see workspace rules §8 / PRD §14.1.
+Wire format: JSON — see firmware/esp32c5/trakn_tag/trakn_tag.ino for schema.
 """
 
 from __future__ import annotations
 
-import base64
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.core import ble_parser
 from backend.app.core.security import verify_gateway_key
-from backend.app.db.models import Device, ImuSample, RttMeasurement, AccessPoint
+from backend.app.db.models import AccessPoint, Device, ImuSample, RttMeasurement
 from backend.app.db.session import get_db
-from backend.app.schemas.gateway import GatewayPacketRequest, GatewayPacketResponse
+from backend.app.schemas.gateway import (
+    GatewayPacketRequest,
+    GatewayPacketResponse,
+    ImuSampleIn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +53,9 @@ async def _get_or_create_device(mac: str, db: AsyncSession) -> Device:
     result = await db.execute(select(Device).where(Device.mac_address == mac))
     device = result.scalar_one_or_none()
     if device is None:
-        device = Device(mac_address=mac, label=f"BW16-{mac}", is_active=True)
+        device = Device(mac_address=mac, label=f"ESP32C5-{mac}", is_active=True)
         db.add(device)
-        await db.flush()  # populate device_id without committing
+        await db.flush()
     return device
 
 
@@ -66,7 +66,7 @@ async def _get_or_create_device(mac: str, db: AsyncSession) -> Device:
     status_code=status.HTTP_202_ACCEPTED,
     response_model=GatewayPacketResponse,
     dependencies=[Depends(_require_api_key)],
-    summary="Receive binary IMU or RTT packet from BW16 device",
+    summary="Receive JSON IMU + Wi-Fi RSSI packet from XIAO ESP32-C5 device",
 )
 async def receive_packet(
     body: GatewayPacketRequest,
@@ -74,90 +74,75 @@ async def receive_packet(
     db: AsyncSession = Depends(get_db),
 ) -> GatewayPacketResponse:
     """
-    Accepts a direct HTTPS POST from the BW16.
+    Accepts a direct HTTPS POST from the XIAO ESP32-C5.
 
     Flow:
       1. Verify X-API-Key (handled by dependency).
-      2. Base64-decode payload_b64.
-      3. Parse binary packet (Type 0x01 IMU or 0x02 RTT).
-      4. Look up / create Device row.
-      5. Persist sample to imu_samples or rtt_measurements.
-      6. Forward to fusion coordinator (fire-and-forget, best-effort).
+      2. Parse JSON packet body.
+      3. Look up / create Device row.
+      4. Persist each IMU sample to imu_samples.
+      5. Persist each Wi-Fi AP entry to rtt_measurements (RSSI only; no RTT distances
+         available on ESP32-C5 — d_raw_mean_m and d_raw_std_m are stored as NULL).
+      6. Forward IMU samples to fusion coordinator (fire-and-forget, best-effort).
       7. Return 202 Accepted.
     """
-    # Step 2 — base64 decode
-    try:
-        raw_bytes = base64.b64decode(body.payload_b64, validate=True)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="payload_b64 is not valid base64",
-        )
+    # Step 3 — device lookup / creation
+    device = await _get_or_create_device(body.mac, db)
 
-    # Step 3 — parse binary packet
-    try:
-        packet = ble_parser.parse(raw_bytes)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Packet parse error: {exc}",
-        )
-
-    # Step 4 — device lookup / creation
-    device = await _get_or_create_device(body.device_mac, db)
-
-    # Step 5 — persist
-    if isinstance(packet, ble_parser.ImuPacket):
+    # Step 4 — persist IMU samples (seq not provided by ESP32-C5 firmware)
+    for s in body.imu:
         sample = ImuSample(
             device_id=device.device_id,
-            ts_device_ms=packet.ts_ms,
-            ax_ms2=packet.ax_ms2,
-            ay_ms2=packet.ay_ms2,
-            az_ms2=packet.az_ms2,
-            gx_rads=packet.gx_rads,
-            gy_rads=packet.gy_rads,
-            gz_rads=packet.gz_rads,
-            seq=packet.seq,
+            ts_device_ms=s.ts,
+            ax_ms2=s.ax,
+            ay_ms2=s.ay,
+            az_ms2=s.az,
+            gx_rads=s.gx,
+            gy_rads=s.gy,
+            gz_rads=s.gz,
+            seq=None,
         )
         db.add(sample)
-        await db.commit()
 
-        # Step 6 — forward to fusion coordinator
-        await _forward_imu(request, packet, body.rx_ts_utc, str(device.device_id))
-
-    elif isinstance(packet, ble_parser.RttPacket):
-        # Persist each AP measurement; skip APs not yet registered (OQ-03)
-        for ap_rec in packet.measurements:
-            result = await db.execute(
-                select(AccessPoint).where(AccessPoint.bssid == ap_rec.bssid)
+    # Step 5 — persist Wi-Fi RSSI scan results
+    for ap_entry in body.wifi:
+        result = await db.execute(
+            select(AccessPoint).where(AccessPoint.bssid == ap_entry.bssid)
+        )
+        ap_row = result.scalar_one_or_none()
+        if ap_row is None:
+            band = "2.4GHz" if ap_entry.ch <= 14 else "5GHz"
+            ap_row = AccessPoint(
+                bssid=ap_entry.bssid,
+                ssid=ap_entry.ssid,
+                band=band,
             )
-            ap_row = result.scalar_one_or_none()
-            if ap_row is None:
-                # AP not yet registered — persist without AP-FK by creating it
-                ap_row = AccessPoint(bssid=ap_rec.bssid, band=ap_rec.band)
-                db.add(ap_row)
-                await db.flush()
+            db.add(ap_row)
+            await db.flush()
 
-            meas = RttMeasurement(
-                device_id=device.device_id,
-                ap_id=ap_row.ap_id,
-                ts_device_ms=packet.ts_ms,
-                d_raw_mean_m=ap_rec.d_raw_mean,
-                d_raw_std_m=ap_rec.d_raw_std,
-                rssi_dbm=ap_rec.rssi,
-                band=ap_rec.band,
-            )
-            db.add(meas)
+        band = "2.4GHz" if ap_entry.ch <= 14 else "5GHz"
+        meas = RttMeasurement(
+            device_id=device.device_id,
+            ap_id=ap_row.ap_id,
+            ts_device_ms=body.ts,
+            d_raw_mean_m=None,   # Wi-Fi RTT not available on ESP32-C5; RSSI scan only
+            d_raw_std_m=None,
+            rssi_dbm=ap_entry.rssi,
+            band=band,
+        )
+        db.add(meas)
 
-        await db.commit()
+    await db.commit()
 
-        # Step 6 — forward to fusion coordinator
-        await _forward_rtt(request, packet, str(device.device_id))
+    # Step 6 — forward IMU to fusion coordinator
+    if body.imu:
+        await _forward_imu(request, body.imu, str(device.device_id))
 
     return GatewayPacketResponse(
         status="accepted",
-        packet_type=packet.packet_type,
-        device_mac=body.device_mac,
+        imu_count=len(body.imu),
+        wifi_count=len(body.wifi),
+        device_mac=body.mac,
     )
 
 
@@ -165,50 +150,22 @@ async def receive_packet(
 
 async def _forward_imu(
     request: Request,
-    packet: ble_parser.ImuPacket,
-    rx_ts: datetime,
-    device_id: str,
+    samples: list[ImuSampleIn],
+    _device_id: str,
 ) -> None:
-    """Forward IMU data to the fusion coordinator if one is registered."""
+    """Forward each IMU sample to the fusion coordinator if one is registered."""
     coordinator = getattr(request.app.state, "coordinator", None)
     if coordinator is None:
         return
-    try:
-        # dt is approximated from rx_ts (device clock not synchronised with server)
-        t = packet.ts_ms / 1000.0
-        dt = 0.01  # 100 Hz nominal; coordinator uses this for EKF predict
-        await coordinator.on_imu(
-            ax=packet.ax_ms2,
-            ay=packet.ay_ms2,
-            az=packet.az_ms2,
-            gz=packet.gz_rads,
-            t=t,
-            dt=dt,
-        )
-    except Exception:
-        logger.exception("IMU forwarding to coordinator failed — continuing")
-
-
-async def _forward_rtt(
-    request: Request,
-    packet: ble_parser.RttPacket,
-    device_id: str,
-) -> None:
-    """Forward RTT measurements to the fusion coordinator if one is registered."""
-    coordinator = getattr(request.app.state, "coordinator", None)
-    if coordinator is None:
-        return
-    try:
-        measurements = [
-            {
-                "bssid": ap.bssid,
-                "d_raw_mean": ap.d_raw_mean,
-                "d_raw_std": ap.d_raw_std,
-                "rssi": ap.rssi,
-                "band": ap.band,
-            }
-            for ap in packet.measurements
-        ]
-        await coordinator.on_rtt(measurements)
-    except Exception:
-        logger.exception("RTT forwarding to coordinator failed — continuing")
+    for s in samples:
+        try:
+            await coordinator.on_imu(
+                ax=s.ax,
+                ay=s.ay,
+                az=s.az,
+                gz=s.gz,
+                t=s.ts / 1000.0,
+                dt=0.01,  # 100 Hz nominal
+            )
+        except Exception:
+            logger.exception("IMU forwarding to coordinator failed — continuing")

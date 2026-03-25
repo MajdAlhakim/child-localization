@@ -10,13 +10,13 @@
 Real-time child indoor localization system for Qatar University Building H07, C Corridor.
 
 **Current architecture (as of 2026-03):**
-BW16 wearable (IMU + one-sided Wi-Fi RTT) → connects directly to QU-USER Wi-Fi → HTTPS POST → Cloud FastAPI server (trakn.duckdns.org:443) → EKF + Bayesian grid fusion → WebSocket → Flutter parent app.
+XIAO ESP32-C5 wearable (IMU + Wi-Fi RSSI scan) → connects directly to QU-User Wi-Fi → HTTPS POST (JSON) → Cloud FastAPI server (trakn.duckdns.org:443) → EKF + Bayesian grid fusion → WebSocket → Flutter parent app.
 
 **Stack:**
 - **Backend:** FastAPI 0.115 + asyncpg + SQLAlchemy 2.0 async + PostgreSQL 16
 - **Fusion:** EKF (4-state) + Bayesian grid (0.5 m cells) + PDR (MATLAB port)
 - **Mobile:** Flutter (Dart), Android 12 primary
-- **Firmware:** BW16 (Realtek RTL8720DN), Arduino C
+- **Firmware:** XIAO ESP32-C5 (Espressif ESP32-C5), Arduino C + FreeRTOS
 - **Infra:** GCP e2-micro VM, Docker Compose, Nginx (TLS on 443)
 
 Full specification: see `PRD.md` in the repository root.
@@ -84,7 +84,7 @@ Step 9.  IF push is rejected (exit code non-zero):
 | Laptop | Owner identity | Tasks | Files (write access) |
 |--------|----------------|-------|----------------------|
 | A | `person-a` | TASK-02,03,04,07,08,19 | `backend/app/db/*`, `backend/app/core/config.py`, `backend/app/core/security.py`, `backend/app/api/admin.py`, `docker-compose.yml`, `Dockerfile`, `backend/requirements.txt` |
-| B | `person-b` | TASK-05,05B,05C,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/bw16/*` |
+| B | `person-b` | TASK-05,05B,05C,06,18 | `backend/app/core/ble_parser.py`, `backend/app/api/gateway.py`, `backend/app/schemas/gateway.py`, `tests/integration/*`, `firmware/esp32c5/*` |
 | C | `person-c` | TASK-09,10,11,12,12B,13 | `backend/app/fusion/*` (includes `pdr.py`, `stride_svr.pkl`, `stride_training_data.json`) |
 | D | `person-d` | TASK-14,15,16,17,20 | `backend/app/api/websocket.py`, `backend/app/api/parent.py`, `app/lib/*` |
 | All | `shared` | TASK-01 | Project scaffold |
@@ -189,27 +189,42 @@ PDR step detection (firmware/Arduino):
 
 ---
 
-## 8. BLE Packet Wire Format (Locked)
+## 8. Packet Wire Format (Locked — ESP32-C5 JSON format)
 
 ```
-IMU (0x01) — 40 bytes, little-endian:
-  [0] 0x01 | [1–6] MAC | [7–14] ts uint64 | [15–38] ax,ay,az,gx,gy,gz float32×6 | [39] seq uint8
+POST body — JSON, sent by firmware/esp32c5/trakn_tag/trakn_tag.ino:
+{
+  "mac":  "24:42:E3:15:E5:72",   // device MAC (string)
+  "ts":   12450,                  // packet timestamp, ms since boot (int)
+  "imu":  [                       // up to 5 IMU samples per packet (100 Hz, posted every 50 ms)
+    { "ts": 12350, "ax": -0.0012, "ay": 0.0034, "az": 9.7821,
+      "gx": 0.0001, "gy": -0.0002, "gz": 0.0003 },
+    ...
+  ],
+  "wifi": [                       // RSSI scan results; empty [] between scans (~every 11 s)
+    { "bssid": "aa:bb:cc:dd:ee:ff", "ssid": "QU User", "rssi": -46, "ch": 6 },
+    ...
+  ]
+}
 
-RTT (0x02) — variable, little-endian:
-  Header: [0] 0x02 | [1–6] MAC | [7–14] ts uint64 | [15] N uint8
-  Per AP record (16 bytes × N starting at byte 16):
-    [0–5] bssid | [6–9] d_raw_mean f32 | [10–13] d_raw_std f32 | [14] rssi i8 | [15] band u8
-    band encoding: 0x01 = 2.4 GHz, 0x02 = 5 GHz
+Notes:
+- No binary encoding, no base64, no seq counter.
+- imu[].ax/ay/az in m/s²  (ACCEL_SCALE = 0.0011978149 applied in firmware)
+- imu[].gx/gy/gz in rad/s (GYRO_SCALE  = 0.0002663309 applied in firmware)
+- wifi[].ch ≤ 14 → 2.4 GHz; ch ≥ 36 → 5 GHz (gateway derives band from channel)
+- d_raw_mean_m and d_raw_std_m are stored as NULL in rtt_measurements (RTT/FTM
+  not yet available on ESP32-C5 — see OQ-01)
 ```
 
 ---
 
 ## 9. API Contracts (Locked Wire Formats)
 
-**Gateway POST body (BW16 → server, direct Wi-Fi):**
+**Gateway POST body (ESP32-C5 → server, direct Wi-Fi):**
 ```json
-{ "device_mac": "24:42:E3:15:E5:72",
-  "rx_ts_utc": "2026-02-27T10:15:30.123Z", "payload_b64": "<base64>" }
+{ "mac": "24:42:E3:15:E5:72", "ts": 12450,
+  "imu": [{"ts":12350,"ax":-0.0012,"ay":0.0034,"az":9.7821,"gx":0.0001,"gy":-0.0002,"gz":0.0003}],
+  "wifi": [{"bssid":"aa:bb:cc:dd:ee:ff","ssid":"QU User","rssi":-46,"ch":6}] }
 ```
 Authentication: `X-API-Key` header.
 
@@ -272,7 +287,7 @@ EKF divergence (> 10 m for > 5 cycles): reset state from Bayesian MAP, P = P₀.
 
 ## 13. Open Questions — Stop and Flag if Your Code Touches These
 
-- **OQ-01:** Does BW16 Realtek SDK expose per-BSSID one-sided FTM RTT with burst control?
+- **OQ-01:** Does the XIAO ESP32-C5 SDK (Espressif Arduino core v3.3.5+) expose per-BSSID one-sided FTM RTT? The ESP32-C5 supports 802.11 FTM in hardware, but the Arduino API surface for it is unconfirmed. Until resolved, the firmware sends RSSI-only Wi-Fi scans and rtt_measurements rows have NULL d_raw_mean_m / d_raw_std_m.
 - ~~**OQ-02:** What BLE gateway protocol do QU APs support?~~ **CLOSED** — BLE gateway not required; direct Wi-Fi used.
 - **OQ-03:** Exact AP (x, y, z) coordinates in H07-C — IT has no floor plan; manual survey required
 - **OQ-04:** QU AP bandwidth — 20 MHz confirmed; 40/80 MHz availability unknown
@@ -280,11 +295,19 @@ EKF divergence (> 10 m for > 5 cycles): reset state from Bayesian MAP, P = P₀.
 
 ## 14. Firmware Note
 
-The BW16 firmware is a **single unified sketch**: `firmware/bw16/main/main.ino`.
-All subsystems (IMU reader, RTT ranger, Wi-Fi HTTPS sender) are compiled and flashed together.
-Flashing overwrites the entire device — never flash subsystem files individually.
+The ESP32-C5 firmware is a **single unified sketch**: `firmware/esp32c5/trakn_tag/trakn_tag.ino`.
+All subsystems (IMU reader at 100 Hz, async Wi-Fi RSSI scanner, HTTPS JSON sender) run as
+separate FreeRTOS tasks and are compiled and flashed together.
+Flashing overwrites the entire device — never flash subsystems individually.
+
+Board package: **esp32 by Espressif Systems v3.3.5+** (via Boards Manager)
+Board selection: `Tools → Board → esp32 → XIAO_ESP32C5`
+USB CDC On Boot: **Enabled**
 
 ```bash
 # Flash everything at once
-arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino --upload -p <PORT>
+arduino-cli compile \
+  --fqbn esp32:esp32:XIAO_ESP32C5 \
+  firmware/esp32c5/trakn_tag/trakn_tag.ino \
+  --upload -p <PORT>
 ```

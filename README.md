@@ -1,7 +1,7 @@
 # Child Indoor Localization System
 
 Real-time child tracking system for **Qatar University Building H07, C Corridor**.
-A BW16 wearable device streams IMU and Wi-Fi RTT data directly to a cloud FastAPI server over HTTPS, using EKF + Bayesian grid fusion to estimate position and push live updates to a Flutter parent app.
+An XIAO ESP32-C5 wearable device streams IMU and Wi-Fi RSSI data directly to a cloud FastAPI server over HTTPS, using EKF + Bayesian grid fusion to estimate position and push live updates to a Flutter parent app.
 
 ---
 
@@ -19,8 +19,8 @@ A BW16 wearable device streams IMU and Wi-Fi RTT data directly to a cloud FastAP
 ## Architecture
 
 ```
-BW16 Device (IMU + Wi-Fi RTT)
-        │ HTTPS POST (QU-User Wi-Fi)
+XIAO ESP32-C5 Device (IMU + Wi-Fi RSSI scan)
+        │ HTTPS POST — JSON (QU-User Wi-Fi)
         ▼
   trakn.duckdns.org:443
   ┌──────────────────────────────────────────────┐
@@ -35,9 +35,10 @@ BW16 Device (IMU + Wi-Fi RTT)
 ```
 
 **Device → Server path:**
-The BW16 tag connects to the venue Wi-Fi network (QU-User) as a standard station.
+The XIAO ESP32-C5 tag connects to the venue Wi-Fi network (QU-User) as a standard station.
 Its MAC address (`24:42:E3:15:E5:72`) is pre-registered with QU IT.
-On power-on it auto-connects and POSTs binary IMU + RTT packets directly to the server over HTTPS — no BLE gateway or GSM module required.
+On power-on it auto-connects and POSTs JSON packets containing batched IMU samples and Wi-Fi RSSI
+scan results directly to the server over HTTPS — no BLE gateway or GSM module required.
 
 ---
 
@@ -55,7 +56,7 @@ child-localization/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── firmware/
-│   └── bw16/             # Arduino sketches (IMU reader, RTT ranger, Wi-Fi sender)
+│   └── esp32c5/          # XIAO ESP32-C5 Arduino sketch (IMU + Wi-Fi + HTTPS sender)
 ├── app/
 │   └── lib/              # Flutter app (screens, services, models)
 ├── nginx/
@@ -75,7 +76,7 @@ child-localization/
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
 | `/api/v1/health` | GET | None | Server + DB status |
-| `/api/v1/gateway/packet` | POST | X-API-Key | Binary IMU/RTT packet ingestion from BW16 |
+| `/api/v1/gateway/packet` | POST | X-API-Key | JSON IMU + Wi-Fi RSSI packet ingestion from ESP32-C5 |
 | `/api/v1/auth/login` | POST | None | Parent JWT login |
 | `/api/v1/devices` | GET | JWT | List linked devices |
 | `/api/v1/devices/{id}/position` | GET | JWT | Latest fused position |
@@ -118,23 +119,31 @@ The stack restarts automatically on VM reboot via systemd.
 
 ---
 
-### 2. BW16 Firmware — Wearable Tag
+### 2. ESP32-C5 Firmware — Wearable Tag
 
-**Requirements:** Arduino IDE or arduino-cli with Realtek AmebaD board support installed.
+**Requirements:** Arduino IDE 2.x with Espressif ESP32 board support v3.3.5+ installed.
 
-The firmware is a **single unified sketch** (`firmware/bw16/main/main.ino`) that runs all subsystems concurrently — IMU sampling, Wi-Fi RTT ranging, and HTTPS packet transmission. Each flash overwrites the entire device, so all functionality must be compiled and uploaded together.
+- Board package: **esp32 by Espressif Systems** (install via Boards Manager)
+- Board selection: `Tools → Board → esp32 → XIAO_ESP32C5`
+- USB CDC On Boot: **Enabled**
+
+The firmware is a **single unified sketch** (`firmware/esp32c5/trakn_tag/trakn_tag.ino`) that runs all subsystems concurrently via FreeRTOS — IMU sampling (100 Hz), Wi-Fi RSSI scanning (~every 11 s), and HTTPS JSON packet transmission (20 packets/sec). Each flash overwrites the entire device, so all functionality must be compiled and uploaded together.
 
 **Flash the firmware:**
 ```bash
-arduino-cli compile --fqbn realtek:AmebaD:rtl8720dn firmware/bw16/main/main.ino --upload -p <PORT>
+arduino-cli compile \
+  --fqbn esp32:esp32:XIAO_ESP32C5 \
+  firmware/esp32c5/trakn_tag/trakn_tag.ino \
+  --upload -p <PORT>
 ```
 
-Or open `firmware/bw16/main/main.ino` in Arduino IDE and click **Upload**.
+Or open `firmware/esp32c5/trakn_tag/trakn_tag.ino` in Arduino IDE and click **Upload**.
 
 The device will:
 1. Connect to `QU-User` Wi-Fi automatically (MAC pre-registered with QU IT)
-2. Sample IMU at ≥ 50 Hz and perform Wi-Fi RTT ranging at ≥ 2 Hz
-3. POST binary packets to `https://trakn.duckdns.org/api/v1/gateway/packet` with `X-API-Key` header
+2. Sample IMU at 100 Hz, batch 5 samples per packet, POST at 20 packets/sec
+3. Perform async Wi-Fi RSSI scan every ~11 s, include results in next POST
+4. POST JSON packets to `https://35.238.189.188/api/v1/gateway/packet` with `X-API-Key` header
 
 > **Device MAC:** `24:42:E3:15:E5:72` — must be registered with venue IT before first use.
 
@@ -156,7 +165,7 @@ flutter build apk --release
 ```
 
 The app will:
-1. Prompt parent to scan the QR code on the BW16 tag to link the device
+1. Prompt parent to scan the QR code on the ESP32-C5 tag to link the device
 2. Log in with parent credentials (`POST /api/v1/auth/login`)
 3. Open a WebSocket connection to `wss://trakn.duckdns.org/ws/position/{device_id}`
 4. Display the child's live position on the H07-C corridor floor plan
@@ -200,8 +209,9 @@ See `tasks.json` for live status.
 
 | Decision | Choice |
 |---|---|
-| Device → Server transport | Direct Wi-Fi HTTPS POST from BW16 (QU-User network) |
-| RTT method | One-sided RTT (BW16 Wi-Fi FTM) |
+| Device → Server transport | Direct Wi-Fi HTTPS POST from ESP32-C5 (QU-User network) |
+| Packet format | JSON (batched IMU array + Wi-Fi RSSI array) |
+| Wi-Fi ranging | RSSI scan (RTT/FTM pending — see OQ-01) |
 | Fusion | EKF 4-state `[px, py, vx, vy]` + Bayesian grid (0.5 m cells) + PDR |
 | TLS | Nginx reverse proxy on port 443, Let's Encrypt cert |
 | Database | PostgreSQL 16 (asyncpg + SQLAlchemy 2.0 async) |
@@ -215,7 +225,7 @@ See `tasks.json` for live status.
 | Metric | Target | Minimum |
 |---|---|---|
 | IMU sampling rate | ≥ 50 Hz | ≥ 25 Hz |
-| RTT cycle rate | ≥ 2 Hz | ≥ 1 Hz |
+| Wi-Fi scan rate | ~every 11 s | every 30 s |
 | WebSocket update rate | ≥ 4 Hz | ≥ 2 Hz |
 | Bayesian grid update | ≤ 50 ms | ≤ 100 ms |
 | End-to-end latency | ≤ 2.0 s | ≤ 2.5 s |

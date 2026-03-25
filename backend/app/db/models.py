@@ -130,7 +130,7 @@ class ImuSample(Base):
     gx_rads = Column(Float, nullable=False)
     gy_rads = Column(Float, nullable=False)
     gz_rads = Column(Float, nullable=False)
-    seq = Column(SmallInteger, nullable=False)
+    seq = Column(SmallInteger, nullable=True)   # nullable: ESP32-C5 firmware does not send seq
 
     device = relationship("Device", back_populates="imu_samples")
 
@@ -151,8 +151,8 @@ class RttMeasurement(Base):
     )
     ts_device_ms = Column(BigInteger, nullable=False)
     ts_server = _now_col()
-    d_raw_mean_m = Column(Float, nullable=False)
-    d_raw_std_m = Column(Float, nullable=False)
+    d_raw_mean_m = Column(Float, nullable=True)   # nullable: NULL when only RSSI is available (ESP32-C5)
+    d_raw_std_m = Column(Float, nullable=True)    # nullable: NULL when only RSSI is available (ESP32-C5)
     d_corrected_m = Column(Float, nullable=True)
     rssi_dbm = Column(SmallInteger, nullable=False)
     band = Column(String(10), nullable=False)
