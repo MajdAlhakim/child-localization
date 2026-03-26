@@ -1,171 +1,102 @@
 """
 backend/app/api/gateway.py
 
-POST /api/v1/gateway/packet — Device gateway endpoint.
+POST /api/v1/gateway/packet
 
-Receives direct HTTPS POSTs from the XIAO ESP32-C5 wearable (over QU-User Wi-Fi).
-Authenticates via X-API-Key header, parses the JSON body, persists IMU samples and
-Wi-Fi RSSI observations to the database, and forwards IMU data to the fusion coordinator.
+Receives JSON packets from the XIAO ESP32-C5 tag.
+Packet format (PRD §6.5 / §16.1):
+{
+    "mac":  "24:42:E3:15:E5:72",
+    "ts":   12450,
+    "imu":  [{"ts":..,"ax":..,"ay":..,"az":..,"gx":..,"gy":..,"gz":..}, ...],
+    "wifi": [{"bssid":"..","ssid":"..","rssi":-46,"ch":6}, ...]
+}
 
-Wire format: JSON — see firmware/esp32c5/trakn_tag/trakn_tag.ino for schema.
+This milestone: validate API key, parse, log to stdout, return 200.
+No database writes. No PDR. No positioning.
 """
 
-from __future__ import annotations
-
 import logging
+import os
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
-from backend.app.core.security import verify_gateway_key
-from backend.app.db.models import AccessPoint, Device, ImuSample, RttMeasurement
-from backend.app.db.session import get_db
-from backend.app.schemas.gateway import (
-    GatewayPacketRequest,
-    GatewayPacketResponse,
-    ImuSampleIn,
+logger = logging.getLogger("trakn.gateway")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
 )
 
-logger = logging.getLogger(__name__)
+router = APIRouter()
 
-router = APIRouter(prefix="/api/v1/gateway", tags=["gateway"])
+# ── Pydantic models (PRD §6.5) ────────────────────────────────────────────────
+
+class ImuSample(BaseModel):
+    ts: int            # device milliseconds
+    ax: float          # m/s²
+    ay: float
+    az: float
+    gx: float          # rad/s
+    gy: float
+    gz: float
 
 
-# ── Dependency: extract and validate the X-API-Key header ────────────────────
+class WifiAP(BaseModel):
+    bssid: str
+    ssid:  str
+    rssi:  int         # dBm
+    ch:    int         # channel
 
-async def _require_api_key(
-    x_api_key: str | None = Header(None, alias="X-API-Key"),
-) -> None:
-    """FastAPI dependency — raises 401 if key is missing or invalid."""
-    if x_api_key is None:
+
+class GatewayPacket(BaseModel):
+    mac:  str
+    ts:   int                        # device milliseconds since boot
+    imu:  list[ImuSample] = Field(default_factory=list)
+    wifi: list[WifiAP]   = Field(default_factory=list)
+
+
+# ── Endpoint ──────────────────────────────────────────────────────────────────
+
+@router.post("/api/v1/gateway/packet", status_code=status.HTTP_200_OK)
+async def receive_packet(
+    packet: GatewayPacket,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Receive a packet from the ESP32 tag, log it, return 200."""
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    expected_key = os.environ.get("GATEWAY_API_KEY", "")
+    if not x_api_key or x_api_key != expected_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-API-Key header is required",
+            detail="Invalid or missing X-API-Key",
         )
-    verify_gateway_key(x_api_key)
 
-
-# ── Helper: look up or auto-create a Device row ───────────────────────────────
-
-async def _get_or_create_device(mac: str, db: AsyncSession) -> Device:
-    """Return the Device for the given MAC, creating it if not seen before."""
-    result = await db.execute(select(Device).where(Device.mac_address == mac))
-    device = result.scalar_one_or_none()
-    if device is None:
-        device = Device(mac_address=mac, label=f"ESP32C5-{mac}", is_active=True)
-        db.add(device)
-        await db.flush()
-    return device
-
-
-# ── POST /api/v1/gateway/packet ───────────────────────────────────────────────
-
-@router.post(
-    "/packet",
-    status_code=status.HTTP_202_ACCEPTED,
-    response_model=GatewayPacketResponse,
-    dependencies=[Depends(_require_api_key)],
-    summary="Receive JSON IMU + Wi-Fi RSSI packet from XIAO ESP32-C5 device",
-)
-async def receive_packet(
-    body: GatewayPacketRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> GatewayPacketResponse:
-    """
-    Accepts a direct HTTPS POST from the XIAO ESP32-C5.
-
-    Flow:
-      1. Verify X-API-Key (handled by dependency).
-      2. Parse JSON packet body.
-      3. Look up / create Device row.
-      4. Persist each IMU sample to imu_samples.
-      5. Persist each Wi-Fi AP entry to rtt_measurements (RSSI only; no RTT distances
-         available on ESP32-C5 — d_raw_mean_m and d_raw_std_m are stored as NULL).
-      6. Forward IMU samples to fusion coordinator (fire-and-forget, best-effort).
-      7. Return 202 Accepted.
-    """
-    # Step 3 — device lookup / creation
-    device = await _get_or_create_device(body.mac, db)
-
-    # Step 4 — persist IMU samples (seq not provided by ESP32-C5 firmware)
-    for s in body.imu:
-        sample = ImuSample(
-            device_id=device.device_id,
-            ts_device_ms=s.ts,
-            ax_ms2=s.ax,
-            ay_ms2=s.ay,
-            az_ms2=s.az,
-            gx_rads=s.gx,
-            gy_rads=s.gy,
-            gz_rads=s.gz,
-            seq=None,
-        )
-        db.add(sample)
-
-    # Step 5 — persist Wi-Fi RSSI scan results
-    for ap_entry in body.wifi:
-        result = await db.execute(
-            select(AccessPoint).where(AccessPoint.bssid == ap_entry.bssid)
-        )
-        ap_row = result.scalar_one_or_none()
-        if ap_row is None:
-            band = "2.4GHz" if ap_entry.ch <= 14 else "5GHz"
-            ap_row = AccessPoint(
-                bssid=ap_entry.bssid,
-                ssid=ap_entry.ssid,
-                band=band,
-            )
-            db.add(ap_row)
-            await db.flush()
-
-        band = "2.4GHz" if ap_entry.ch <= 14 else "5GHz"
-        meas = RttMeasurement(
-            device_id=device.device_id,
-            ap_id=ap_row.ap_id,
-            ts_device_ms=body.ts,
-            d_raw_mean_m=None,   # Wi-Fi RTT not available on ESP32-C5; RSSI scan only
-            d_raw_std_m=None,
-            rssi_dbm=ap_entry.rssi,
-            band=band,
-        )
-        db.add(meas)
-
-    await db.commit()
-
-    # Step 6 — forward IMU to fusion coordinator
-    if body.imu:
-        await _forward_imu(request, body.imu, str(device.device_id))
-
-    return GatewayPacketResponse(
-        status="accepted",
-        imu_count=len(body.imu),
-        wifi_count=len(body.wifi),
-        device_mac=body.mac,
+    # ── Log packet metadata ───────────────────────────────────────────────────
+    logger.info(
+        "PACKET  mac=%s  device_ts=%d ms  imu_samples=%d  wifi_aps=%d",
+        packet.mac,
+        packet.ts,
+        len(packet.imu),
+        len(packet.wifi),
     )
 
+    # ── Log each WiFi AP ──────────────────────────────────────────────────────
+    for ap in packet.wifi:
+        logger.info(
+            "  WIFI  bssid=%s  ssid=%-20s  rssi=%4d dBm  ch=%d",
+            ap.bssid,
+            ap.ssid,
+            ap.rssi,
+            ap.ch,
+        )
 
-# ── Coordinator forwarding helpers ────────────────────────────────────────────
-
-async def _forward_imu(
-    request: Request,
-    samples: list[ImuSampleIn],
-    _device_id: str,
-) -> None:
-    """Forward each IMU sample to the fusion coordinator if one is registered."""
-    coordinator = getattr(request.app.state, "coordinator", None)
-    if coordinator is None:
-        return
-    for s in samples:
-        try:
-            await coordinator.on_imu(
-                ax=s.ax,
-                ay=s.ay,
-                az=s.az,
-                gz=s.gz,
-                t=s.ts / 1000.0,
-                dt=0.01,  # 100 Hz nominal
-            )
-        except Exception:
-            logger.exception("IMU forwarding to coordinator failed — continuing")
+    # ── Response (PRD §16.1) ──────────────────────────────────────────────────
+    return {
+        "status":      "ok",
+        "mac":         packet.mac,
+        "imu_samples": len(packet.imu),
+        "wifi_aps":    len(packet.wifi),
+    }
