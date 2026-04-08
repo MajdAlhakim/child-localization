@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.gateway import router as gateway_router
-from backend.app.api.websocket import router as ws_router
 from backend.app.api.venue import router as venue_router
 
 app = FastAPI(title="TRAKN Backend", version="1.0.0")
@@ -14,7 +13,6 @@ app.add_middleware(
 )
 
 app.include_router(gateway_router)
-app.include_router(ws_router)
 app.include_router(venue_router)
 
 
