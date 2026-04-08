@@ -1,0 +1,250 @@
+"""
+backend/app/api/venue.py
+
+Venue / Access-Point management + floor plan endpoints.
+
+GET    /api/v1/venue/aps                      → list all placed APs
+POST   /api/v1/venue/ap                       → add / update one AP
+DELETE /api/v1/venue/aps                      → clear all APs
+POST   /api/v1/venue/floor-plan               → upload floor plan image (multipart)
+GET    /api/v1/venue/floor-plan               → serve the stored floor plan image
+POST   /api/v1/venue/grid-points              → store walkable grid points
+GET    /api/v1/venue/grid-points              → retrieve stored grid points
+POST   /api/v1/venue/radio-map/compute        → trigger radio map computation
+GET    /api/v1/venue/radio-map/status/{tid}   → poll computation progress
+GET    /api/v1/venue/radio-map                → retrieve computed radio map
+"""
+
+import math
+import os
+import uuid
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, UploadFile, File, status
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+router = APIRouter()
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+_ap_store: dict[str, dict] = {}
+_grid_store: dict[str, Any] = {}   # keys: scale_px_per_m, grid_spacing_m, points
+_task_store: dict[str, dict] = {}  # task_id → {status, progress}
+_radio_map: list[dict] = []
+
+_UPLOAD_DIR = Path("/srv/backend/uploads")
+_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+_FLOOR_PLAN_PATH = _UPLOAD_DIR / "floor_plan"
+
+
+# ── Auth helper ───────────────────────────────────────────────────────────────
+
+def _check_key(x_api_key: str | None) -> None:
+    expected = os.environ.get("GATEWAY_API_KEY", "")
+    if not x_api_key or x_api_key != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key",
+        )
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+class AccessPoint(BaseModel):
+    bssid: str
+    ssid: str
+    rssi_ref: float = -40.0
+    path_loss_n: float = 2.7
+    x: float = 0.0
+    y: float = 0.0
+
+
+class GridPoint(BaseModel):
+    x: float
+    y: float
+
+
+class GridPointsRequest(BaseModel):
+    scale_px_per_m: float = 10.0
+    grid_spacing_m: float = 0.5
+    points: list[GridPoint]
+
+
+# ── AP endpoints ──────────────────────────────────────────────────────────────
+
+@router.get("/api/v1/venue/aps")
+async def get_aps(
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _check_key(x_api_key)
+    return {"access_points": list(_ap_store.values())}
+
+
+@router.post("/api/v1/venue/ap", status_code=status.HTTP_200_OK)
+async def post_ap(
+    ap: AccessPoint,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, str]:
+    _check_key(x_api_key)
+    _ap_store[ap.bssid] = ap.model_dump()
+    return {"status": "ok"}
+
+
+@router.delete("/api/v1/venue/aps", status_code=status.HTTP_200_OK)
+async def delete_all_aps(
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, str]:
+    _check_key(x_api_key)
+    _ap_store.clear()
+    return {"status": "ok"}
+
+
+# ── Floor plan endpoints ──────────────────────────────────────────────────────
+
+@router.post("/api/v1/venue/floor-plan", status_code=status.HTTP_200_OK)
+async def upload_floor_plan(
+    file: UploadFile = File(...),
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, str]:
+    """Upload a floor plan image (JPEG, PNG, or SVG). Replaces any existing one."""
+    _check_key(x_api_key)
+
+    content_type = file.content_type or ""
+    if content_type not in ("image/jpeg", "image/png", "image/jpg", "image/svg+xml"):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Only JPEG, PNG, and SVG images are accepted",
+        )
+
+    data = await file.read()
+    _FLOOR_PLAN_PATH.write_bytes(data)
+    return {"status": "ok", "size": str(len(data))}
+
+
+@router.get("/api/v1/venue/floor-plan")
+async def get_floor_plan() -> FileResponse:
+    """Serve the stored floor plan image."""
+    if not _FLOOR_PLAN_PATH.exists():
+        raise HTTPException(status_code=404, detail="No floor plan uploaded yet")
+
+    data = _FLOOR_PLAN_PATH.read_bytes()
+    if data[:4] == b"\x89PNG":
+        media_type = "image/png"
+    elif data[:4] == b"<svg" or b"<svg" in data[:256]:
+        media_type = "image/svg+xml"
+    else:
+        media_type = "image/jpeg"
+    return FileResponse(str(_FLOOR_PLAN_PATH), media_type=media_type)
+
+
+# ── Grid points endpoints ─────────────────────────────────────────────────────
+
+@router.post("/api/v1/venue/grid-points", status_code=status.HTTP_200_OK)
+async def post_grid_points(
+    body: GridPointsRequest,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Store the walkable grid generated by the Web Mapping Tool."""
+    _check_key(x_api_key)
+    _grid_store["scale_px_per_m"] = body.scale_px_per_m
+    _grid_store["grid_spacing_m"] = body.grid_spacing_m
+    _grid_store["points"] = [{"x": p.x, "y": p.y} for p in body.points]
+    return {"status": "ok", "count": len(body.points)}
+
+
+@router.get("/api/v1/venue/grid-points")
+async def get_grid_points(
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Return the stored grid (used by other backend components)."""
+    _check_key(x_api_key)
+    if not _grid_store:
+        raise HTTPException(status_code=404, detail="No grid stored yet")
+    return _grid_store
+
+
+# ── Radio map endpoints ───────────────────────────────────────────────────────
+
+def _compute_radio_map(task_id: str) -> None:
+    """
+    Background task: for every (grid point, AP) pair compute the estimated RSSI
+    using the log-distance path loss model:
+        rssi_est = rssi_ref - 10 * n * log10(max(dist_m, 0.1))
+    """
+    points = _grid_store.get("points", [])
+    aps = list(_ap_store.values())
+
+    if not points or not aps:
+        _task_store[task_id] = {"status": "failed", "progress": 0,
+                                "detail": "No grid points or APs stored"}
+        return
+
+    total = len(points) * len(aps)
+    entries: list[dict] = []
+    done = 0
+
+    for pt in points:
+        for ap in aps:
+            dx = pt["x"] - ap["x"]
+            dy = pt["y"] - ap["y"]
+            dist_m = math.sqrt(dx * dx + dy * dy)
+            dist_m = max(dist_m, 0.1)
+            rssi_est = ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(dist_m)
+            entries.append({
+                "bssid": ap["bssid"],
+                "x_m": round(pt["x"], 3),
+                "y_m": round(pt["y"], 3),
+                "rssi_est": round(rssi_est, 2),
+                "dist_m": round(dist_m, 3),
+            })
+            done += 1
+            # Update progress every 500 entries so the poll sees smooth movement
+            if done % 500 == 0:
+                _task_store[task_id]["progress"] = int(done / total * 100)
+
+    _radio_map.clear()
+    _radio_map.extend(entries)
+    _task_store[task_id] = {"status": "done", "progress": 100}
+
+
+@router.post("/api/v1/venue/radio-map/compute", status_code=status.HTTP_200_OK)
+async def compute_radio_map(
+    background_tasks: BackgroundTasks,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, str]:
+    """Trigger asynchronous radio map computation."""
+    _check_key(x_api_key)
+
+    if not _grid_store.get("points"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No grid points stored. Save the grid first (Step 3).",
+        )
+    if not _ap_store:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No APs stored. Place APs first (Step 4).",
+        )
+
+    task_id = str(uuid.uuid4())
+    _task_store[task_id] = {"status": "computing", "progress": 0}
+    background_tasks.add_task(_compute_radio_map, task_id)
+    return {"status": "computing", "task_id": task_id}
+
+
+@router.get("/api/v1/venue/radio-map/status/{task_id}")
+async def get_radio_map_status(task_id: str) -> dict[str, Any]:
+    """Poll the progress of a radio map computation task."""
+    task = _task_store.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@router.get("/api/v1/venue/radio-map")
+async def get_radio_map() -> dict[str, Any]:
+    """Return the most recently computed radio map."""
+    if not _radio_map:
+        raise HTTPException(status_code=404, detail="Radio map not computed yet")
+    return {"radio_map": _radio_map}

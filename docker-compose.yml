@@ -38,6 +38,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./app/web:/usr/share/nginx/html/tool:ro
     depends_on:
       - backend
 
