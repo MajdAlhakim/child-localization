@@ -24,6 +24,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - uploads_data:/srv/backend/uploads
     # Backend is NOT exposed on public port 8000 anymore
     # All traffic comes through Nginx on 443
     expose:
@@ -44,3 +46,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:
