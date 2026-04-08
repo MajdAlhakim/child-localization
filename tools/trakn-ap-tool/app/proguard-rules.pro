@@ -1,0 +1,3 @@
+-keep class qa.qu.trakn.aptool.data.models.** { *; }
+-keepattributes Signature
+-keepattributes *Annotation*

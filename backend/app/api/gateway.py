@@ -1,214 +1,193 @@
-﻿"""
+"""
 backend/app/api/gateway.py
 
-POST /api/v1/gateway/packet — Device gateway endpoint.
+POST /api/v1/gateway/packet
 
-Receives direct HTTPS POSTs from the BW16 wearable device (over QU-User Wi-Fi).
-Authenticates via X-API-Key header, base64-decodes the binary payload,
-routes to the packet parser, persists to the database, and forwards to the
-fusion coordinator.
+Receives JSON packets from the XIAO ESP32-C5 tag.
+Packet format (PRD §6.2 / §16.1):
+{
+    "mac":  "24:42:E3:15:E5:72",
+    "ts":   12450,
+    "imu":  [{"ts":.., "ax":.., "ay":.., "az":.., "gx":.., "gy":.., "gz":..}, ...],
+    "wifi": [{"bssid":"..", "ssid":"..", "rssi":-46, "ch":6}, ...]
+}
 
-Wire format: see workspace rules §8 / PRD §14.1.
+Milestone 1: validate API key, parse, log, return 200.
+Milestone 2: run PDR engine on each IMU sample, return position in response.
 """
 
-from __future__ import annotations
-
-import base64
 import logging
-from datetime import datetime, timezone
+import os
+import time
+from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
-from backend.app.core import ble_parser
-from backend.app.core.security import verify_gateway_key
-from backend.app.db.models import Device, ImuSample, RttMeasurement, AccessPoint
-from backend.app.db.session import get_db
-from backend.app.schemas.gateway import GatewayPacketRequest, GatewayPacketResponse
+from ..fusion.device_state import DeviceState
+from ..core.broadcaster import broadcaster
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("trakn.gateway")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+)
 
-router = APIRouter(prefix="/api/v1/gateway", tags=["gateway"])
+router = APIRouter()
+
+# ── Module-level device state registry ───────────────────────────────────────
+# One DeviceState (with its own PDREngine) per MAC address.
+# Persists for the lifetime of the server process — no DB interaction.
+device_states: dict[str, DeviceState] = {}
 
 
-# ── Dependency: extract and validate the X-API-Key header ────────────────────
+# ── Pydantic models (PRD §6.2) ────────────────────────────────────────────────
 
-async def _require_api_key(
-    x_api_key: str | None = Header(None, alias="X-API-Key"),
-) -> None:
-    """FastAPI dependency — raises 401 if key is missing or invalid."""
-    if x_api_key is None:
+class ImuSample(BaseModel):
+    ts: int            # device milliseconds
+    ax: float          # m/s²
+    ay: float
+    az: float
+    gx: float          # rad/s
+    gy: float
+    gz: float
+
+
+class WifiAP(BaseModel):
+    bssid: str
+    ssid:  str
+    rssi:  int         # dBm
+    ch:    int         # channel
+
+
+class GatewayPacket(BaseModel):
+    mac:  str
+    ts:   int                        # device milliseconds since boot
+    imu:  list[ImuSample] = Field(default_factory=list)
+    wifi: list[WifiAP]   = Field(default_factory=list)
+
+
+# ── Endpoint ──────────────────────────────────────────────────────────────────
+
+@router.post("/api/v1/gateway/packet", status_code=status.HTTP_200_OK)
+async def receive_packet(
+    packet: GatewayPacket,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Receive a packet from the ESP32-C5 tag, run PDR, return 200 + position."""
+
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    expected_key = os.environ.get("GATEWAY_API_KEY", "")
+    if not x_api_key or x_api_key != expected_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-API-Key header is required",
-        )
-    verify_gateway_key(x_api_key)
-
-
-# ── Helper: look up or auto-create a Device row ───────────────────────────────
-
-async def _get_or_create_device(mac: str, db: AsyncSession) -> Device:
-    """Return the Device for the given MAC, creating it if not seen before."""
-    result = await db.execute(select(Device).where(Device.mac_address == mac))
-    device = result.scalar_one_or_none()
-    if device is None:
-        device = Device(mac_address=mac, label=f"BW16-{mac}", is_active=True)
-        db.add(device)
-        await db.flush()  # populate device_id without committing
-    return device
-
-
-# ── POST /api/v1/gateway/packet ───────────────────────────────────────────────
-
-@router.post(
-    "/packet",
-    status_code=status.HTTP_202_ACCEPTED,
-    response_model=GatewayPacketResponse,
-    dependencies=[Depends(_require_api_key)],
-    summary="Receive binary IMU or RTT packet from BW16 device",
-)
-async def receive_packet(
-    body: GatewayPacketRequest,
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> GatewayPacketResponse:
-    """
-    Accepts a direct HTTPS POST from the BW16.
-
-    Flow:
-      1. Verify X-API-Key (handled by dependency).
-      2. Base64-decode payload_b64.
-      3. Parse binary packet (Type 0x01 IMU or 0x02 RTT).
-      4. Look up / create Device row.
-      5. Persist sample to imu_samples or rtt_measurements.
-      6. Forward to fusion coordinator (fire-and-forget, best-effort).
-      7. Return 202 Accepted.
-    """
-    # Step 2 — base64 decode
-    try:
-        raw_bytes = base64.b64decode(body.payload_b64, validate=True)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="payload_b64 is not valid base64",
+            detail="Invalid or missing X-API-Key",
         )
 
-    # Step 3 — parse binary packet
-    try:
-        packet = ble_parser.parse(raw_bytes)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Packet parse error: {exc}",
-        )
+    mac  = packet.mac
+    imu  = packet.imu
+    wifi = packet.wifi
 
-    # Step 4 — device lookup / creation
-    device = await _get_or_create_device(body.device_mac, db)
-
-    # Step 5 — persist
-    if isinstance(packet, ble_parser.ImuPacket):
-        sample = ImuSample(
-            device_id=device.device_id,
-            ts_device_ms=packet.ts_ms,
-            ax_ms2=packet.ax_ms2,
-            ay_ms2=packet.ay_ms2,
-            az_ms2=packet.az_ms2,
-            gx_rads=packet.gx_rads,
-            gy_rads=packet.gy_rads,
-            gz_rads=packet.gz_rads,
-            seq=packet.seq,
-        )
-        db.add(sample)
-        await db.commit()
-
-        # Step 6 — forward to fusion coordinator
-        await _forward_imu(request, packet, body.rx_ts_utc, str(device.device_id))
-
-    elif isinstance(packet, ble_parser.RttPacket):
-        # Persist each AP measurement; skip APs not yet registered (OQ-03)
-        for ap_rec in packet.measurements:
-            result = await db.execute(
-                select(AccessPoint).where(AccessPoint.bssid == ap_rec.bssid)
-            )
-            ap_row = result.scalar_one_or_none()
-            if ap_row is None:
-                # AP not yet registered — persist without AP-FK by creating it
-                ap_row = AccessPoint(bssid=ap_rec.bssid, band=ap_rec.band)
-                db.add(ap_row)
-                await db.flush()
-
-            meas = RttMeasurement(
-                device_id=device.device_id,
-                ap_id=ap_row.ap_id,
-                ts_device_ms=packet.ts_ms,
-                d_raw_mean_m=ap_rec.d_raw_mean,
-                d_raw_std_m=ap_rec.d_raw_std,
-                rssi_dbm=ap_rec.rssi,
-                band=ap_rec.band,
-            )
-            db.add(meas)
-
-        await db.commit()
-
-        # Step 6 — forward to fusion coordinator
-        await _forward_rtt(request, packet, str(device.device_id))
-
-    return GatewayPacketResponse(
-        status="accepted",
-        packet_type=packet.packet_type,
-        device_mac=body.device_mac,
+    # ── Log packet metadata ───────────────────────────────────────────────────
+    logger.info(
+        "PACKET  mac=%s  device_ts=%d ms  imu_samples=%d  wifi_aps=%d",
+        mac,
+        packet.ts,
+        len(imu),
+        len(wifi),
     )
 
-
-# ── Coordinator forwarding helpers ────────────────────────────────────────────
-
-async def _forward_imu(
-    request: Request,
-    packet: ble_parser.ImuPacket,
-    rx_ts: datetime,
-    device_id: str,
-) -> None:
-    """Forward IMU data to the fusion coordinator if one is registered."""
-    coordinator = getattr(request.app.state, "coordinator", None)
-    if coordinator is None:
-        return
-    try:
-        # dt is approximated from rx_ts (device clock not synchronised with server)
-        t = packet.ts_ms / 1000.0
-        dt = 0.01  # 100 Hz nominal; coordinator uses this for EKF predict
-        await coordinator.on_imu(
-            ax=packet.ax_ms2,
-            ay=packet.ay_ms2,
-            az=packet.az_ms2,
-            gz=packet.gz_rads,
-            t=t,
-            dt=dt,
+    # ── Log each WiFi AP ──────────────────────────────────────────────────────
+    for ap in wifi:
+        logger.info(
+            "  WIFI  bssid=%s  ssid=%-20s  rssi=%4d dBm  ch=%d",
+            ap.bssid,
+            ap.ssid,
+            ap.rssi,
+            ap.ch,
         )
-    except Exception:
-        logger.exception("IMU forwarding to coordinator failed — continuing")
+
+    # ── Get or create device state ────────────────────────────────────────────
+    if mac not in device_states:
+        device_states[mac] = DeviceState(mac=mac)
+        logger.info("  NEW device registered: %s", mac)
+    state = device_states[mac]
+    state.last_seen_ts = time.time()
+
+    # ── Run PDR on each IMU sample — broadcast immediately once calibrated ────
+    pdr_result = None
+    for sample in imu:
+        state.imu_buffer.append({
+            "seq": state.imu_seq,
+            "ts":  sample.ts,
+            "ax":  sample.ax, "ay": sample.ay, "az": sample.az,
+            "gx":  sample.gx, "gy": sample.gy, "gz": sample.gz,
+        })
+        state.imu_seq += 1
+        pdr_result = state.pdr.ingest_sample(
+            ts_ms = sample.ts,
+            ax    = sample.ax,
+            ay    = sample.ay,
+            az    = sample.az,
+            gx    = sample.gx,
+            gy    = sample.gy,
+            gz    = sample.gz,
+        )
+        # Broadcast per-sample once gyro bias is calibrated
+        if pdr_result["bias_calibrated"]:
+            msg = dict(pdr_result)
+            msg["source"]     = "pdr_only"
+            msg["mode"]       = "imu_only"
+            msg["confidence"] = 0.0
+            await broadcaster.broadcast(mac, msg)
+
+    # ── Log PDR output ────────────────────────────────────────────────────────
+    if pdr_result:
+        logger.info(
+            "  PDR: x=%.2f y=%.2f steps=%d cal=%s",
+            pdr_result["x"],
+            pdr_result["y"],
+            pdr_result["step_count"],
+            pdr_result["bias_calibrated"],
+        )
+
+    # ── Response (PRD §16.1) ──────────────────────────────────────────────────
+    return {
+        "status":      "ok",
+        "mac":         mac,
+        "imu_samples": len(imu),
+        "wifi_aps":    len(wifi),
+        "position": pdr_result if pdr_result else {
+            "x": 0.0, "y": 0.0, "heading": 0.0,
+            "heading_deg": 0.0, "step_count": 0,
+            "bias_calibrated": False,
+        },
+    }
 
 
-async def _forward_rtt(
-    request: Request,
-    packet: ble_parser.RttPacket,
-    device_id: str,
-) -> None:
-    """Forward RTT measurements to the fusion coordinator if one is registered."""
-    coordinator = getattr(request.app.state, "coordinator", None)
-    if coordinator is None:
-        return
-    try:
-        measurements = [
-            {
-                "bssid": ap.bssid,
-                "d_raw_mean": ap.d_raw_mean,
-                "d_raw_std": ap.d_raw_std,
-                "rssi": ap.rssi,
-                "band": ap.band,
-            }
-            for ap in packet.measurements
-        ]
-        await coordinator.on_rtt(measurements)
-    except Exception:
-        logger.exception("RTT forwarding to coordinator failed — continuing")
+@router.get("/api/v1/position/{mac}", status_code=status.HTTP_200_OK)
+async def get_position(mac: str) -> dict[str, Any]:
+    """Return the current PDR position for a device (for local visualizers)."""
+    state = device_states.get(mac)
+    if state is None:
+        return {"mac": mac, "known": False,
+                "position": {"x": 0.0, "y": 0.0, "heading": 0.0,
+                             "heading_deg": 0.0, "step_count": 0,
+                             "bias_calibrated": False}}
+    pos = state.pdr._state()
+    return {"mac": mac, "known": True, "last_seen_ts": state.last_seen_ts,
+            "position": pos}
+
+
+@router.get("/api/v1/imu/{mac}", status_code=status.HTTP_200_OK)
+async def get_imu_samples(mac: str, since: int = 0) -> dict[str, Any]:
+    """
+    Return raw IMU samples buffered since sequence number `since`.
+    Used by the local Python visualizer to replay samples exactly as
+    MATLAB reads them from the COM port — but via HTTP instead.
+    """
+    state = device_states.get(mac)
+    if state is None:
+        return {"mac": mac, "samples": [], "next_seq": 0}
+    samples = [s for s in state.imu_buffer if s["seq"] >= since]
+    return {"mac": mac, "samples": samples, "next_seq": state.imu_seq}

@@ -1,0 +1,16 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\tools",
+    "\\tools\\trakn-ap-tool\\app",
+    "\\tools\\trakn-ap-tool\\app\\src",
+    "\\tools\\trakn-ap-tool\\app\\src\\main",
+    "\\tools\\trakn-ap-tool\\app\\src\\main\\kotlin",
+    "\\tools\\trakn-ap-tool\\app\\src\\main\\kotlin\\qa",
+    "\\tools\\trakn-ap-tool\\app\\src\\main\\kotlin\\qa\\qu",
+    "\\tools\\trakn-ap-tool\\app\\src\\main\\kotlin\\qa\\qu\\trakn",
+    "\\tools\\trakn-ap-tool\\app\\src\\main\\kotlin\\qa\\qu\\trakn\\aptool"
+  ],
+  "SelectedNode": "\\tools\\trakn-ap-tool",
+  "PreviewInSolutionExplorer": false
+}
