@@ -132,7 +132,7 @@ async def list_venues(db: AsyncSession = Depends(get_db)) -> dict:
                               .selectinload(FloorPlan.access_points))
         .order_by(Venue.created_at)
     )
-    venues = result.scalars().all()
+    venues = result.unique().scalars().all()
     return {
         "venues": [
             {

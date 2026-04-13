@@ -2070,7 +2070,19 @@ if (CURRENT_FP_ID) {
   goStep(1);
   setTool('select');
   updateZoomDisplay();
-  toast('TRAKN Mapping Tool ready. Start with Step 1.', 'info', 4000);
+  toast('TRAKN Mapping Tool ready. Loading floor plan…', 'info', 3000);
+
+  // Auto-load the floor plan image from server
+  (async () => {
+    try {
+      const res = await api('GET', fpUrl('/image'));
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      displayFloorPlan(url, 'floor-plan-from-server');
+    } catch (e) {
+      toast('No floor plan image on server yet — upload one in Step 1.', 'warn', 5000);
+    }
+  })();
 
   (async () => {
     try {
