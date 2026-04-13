@@ -2194,10 +2194,7 @@ async function createVenue() {
   if (!name) { toast('Enter a venue name', 'error'); return; }
   const desc = document.getElementById('cv-desc').value.trim();
   try {
-    const apiKey = localStorage.getItem('trakn_api_key') || prompt('Enter API key:') || '';
-    localStorage.setItem('trakn_api_key', apiKey);
-    await apiJSON('POST', '/api/v1/venues', { name, description: desc },
-                  false, { 'X-API-Key': apiKey });
+    await apiJSON('POST', '/api/v1/venues', { name, description: desc });
     closeModal('modal-create-venue');
     toast('Venue created', 'success');
     await loadVenues();
@@ -2222,17 +2219,13 @@ async function addFloorPlan() {
   const file    = document.getElementById('af-file').files[0];
   if (!file) { toast('Select an image file', 'error'); return; }
 
-  const apiKey = localStorage.getItem('trakn_api_key') || prompt('Enter API key:') || '';
-  localStorage.setItem('trakn_api_key', apiKey);
-
   const form = new FormData();
   form.append('name', name);
   form.append('floor_number', num);
   form.append('file', file);
 
   try {
-    const fp = await apiJSON('POST', `/api/v1/venues/${venueId}/floor-plans`, form, true,
-                             { 'X-API-Key': apiKey });
+    const fp = await apiJSON('POST', `/api/v1/venues/${venueId}/floor-plans`, form, true);
     closeModal('modal-add-floor');
     toast('Floor plan created — opening tool…', 'success');
     setTimeout(() => openFloorPlan(fp.id), 800);
@@ -2243,9 +2236,8 @@ async function addFloorPlan() {
 
 async function deleteVenue(venueId, name) {
   if (!confirm(`Delete venue "${name}" and ALL its floor plans? This cannot be undone.`)) return;
-  const apiKey = localStorage.getItem('trakn_api_key') || '';
   try {
-    await api('DELETE', `/api/v1/venues/${venueId}`, null, false, { 'X-API-Key': apiKey });
+    await api('DELETE', `/api/v1/venues/${venueId}`);
     toast('Venue deleted', 'info');
     await loadVenues();
   } catch (e) {
