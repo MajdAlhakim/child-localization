@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from ..core.broadcaster import broadcaster
+from ..fusion.tag_registry import registry
 
 router = APIRouter()
 
@@ -8,18 +9,22 @@ router = APIRouter()
 @router.websocket("/ws/position/{tag_id}")
 async def position_stream(websocket: WebSocket, tag_id: str):
     """
-    Real-time position stream for a specific tag (PRD §5.3, §16.2).
+    Real-time position stream for a specific tag.
 
-    Client connects and receives position updates as they arrive from the device.
-    Connection closes cleanly on client disconnect.
+    tag_id must be a registered TRAKN-XXXX ID (assigned when the device first
+    connects). Clients obtain it by scanning the QR code on the physical tag
+    or from GET /api/v1/tags.
 
-    tag_id: unique tag identifier (e.g. "TRAKN-0042")
-            In dev/testing use the device MAC as tag_id:
-            ws://35.238.189.188/ws/position/24:42:E3:15:E5:72
+    Rejects unknown tag IDs with WebSocket close code 4004 so the Flutter
+    app can show a meaningful "Tag not found" error instead of silently
+    failing to receive updates.
     """
+    if registry.get(tag_id) is None:
+        await websocket.close(code=4004, reason=f"Tag {tag_id!r} not registered")
+        return
+
     await broadcaster.connect(tag_id, websocket)
     try:
-        # Keep connection open — we do not receive messages from the client
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:

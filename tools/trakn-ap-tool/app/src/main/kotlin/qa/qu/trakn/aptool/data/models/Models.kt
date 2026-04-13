@@ -18,6 +18,7 @@ data class PostApRequest(
     @SerializedName("path_loss_n") val pathLossN: Double,
     val x: Double,
     val y: Double,
+    @SerializedName("group_id") val groupId: String? = null,
 )
 
 data class GetApsResponse(

@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
@@ -70,7 +72,8 @@ fun MapScreen(
     viewModel: MapViewModel,
     scanViewModel: ScanViewModel,
 ) {
-    val state by viewModel.state.collectAsState()
+    val state     by viewModel.state.collectAsState()
+    val scanState by scanViewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -87,6 +90,11 @@ fun MapScreen(
         scale = (scale * zoomChange).coerceIn(0.5f, 8f)
         offset += panChange
     }
+
+    // Actual intrinsic size of the loaded floor plan image.
+    // Updated via AsyncImage onSuccess so Canvas and tap math always use real dimensions.
+    var imgNaturalW by remember { mutableFloatStateOf(FLOOR_PLAN_PX_W) }
+    var imgNaturalH by remember { mutableFloatStateOf(FLOOR_PLAN_PX_H) }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
 
@@ -110,20 +118,23 @@ fun MapScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .transformable(transformState)
-                .pointerInput(Unit) {
+                .pointerInput(imgNaturalW, imgNaturalH) {
                     detectTapGestures { tapOffset ->
                         val canvasW = size.width.toFloat()
                         val canvasH = size.height.toFloat()
-                        val imgW = FLOOR_PLAN_PX_W * scale
-                        val imgH = FLOOR_PLAN_PX_H * scale
-                        val imgLeft = offset.x + (canvasW - imgW) / 2
-                        val imgTop  = offset.y + (canvasH - imgH) / 2
+                        // ContentScale.Fit scale factor for the real image dimensions
+                        val fitScale = minOf(canvasW / imgNaturalW, canvasH / imgNaturalH)
+                        val displayedW = imgNaturalW * fitScale
+                        val displayedH = imgNaturalH * fitScale
+                        val imgLeft = (canvasW - displayedW * scale) / 2 + offset.x
+                        val imgTop  = (canvasH - displayedH * scale) / 2 + offset.y
 
-                        val xOnImg = (tapOffset.x - imgLeft) / scale
-                        val yOnImg = (tapOffset.y - imgTop) / scale
+                        // Convert tap → floor plan natural pixels
+                        val xOnImg = (tapOffset.x - imgLeft) / (scale * fitScale)
+                        val yOnImg = (tapOffset.y - imgTop)  / (scale * fitScale)
 
-                        if (xOnImg in 0f..FLOOR_PLAN_PX_W && yOnImg in 0f..FLOOR_PLAN_PX_H) {
-                            viewModel.onMapTap(xOnImg, yOnImg, scanViewModel.bestAp)
+                        if (xOnImg in 0f..imgNaturalW && yOnImg in 0f..imgNaturalH) {
+                            viewModel.onMapTap(xOnImg, yOnImg, scanViewModel.bestAp, scanState.aps)
                         }
                     }
                 }
@@ -138,6 +149,10 @@ fun MapScreen(
                         .build(),
                     contentDescription = "Floor plan",
                     contentScale = ContentScale.Fit,
+                    onSuccess = { result ->
+                        imgNaturalW = result.painter.intrinsicSize.width.takeIf { it > 0 } ?: FLOOR_PLAN_PX_W
+                        imgNaturalH = result.painter.intrinsicSize.height.takeIf { it > 0 } ?: FLOOR_PLAN_PX_H
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer(
@@ -160,7 +175,7 @@ fun MapScreen(
                 }
             }
 
-            // Grid + AP markers
+            // Grid + AP markers — coordinate system matches ContentScale.Fit display
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
@@ -171,13 +186,14 @@ fun MapScreen(
             ) {
                 val canvasW = size.width
                 val canvasH = size.height
-                val startX = (canvasW - FLOOR_PLAN_PX_W) / 2
-                val startY = (canvasH - FLOOR_PLAN_PX_H) / 2
+                val fitScale = minOf(canvasW / imgNaturalW, canvasH / imgNaturalH)
+                val startX = (canvasW - imgNaturalW * fitScale) / 2
+                val startY = (canvasH - imgNaturalH * fitScale) / 2
 
-                // Grid dots
+                // Grid dots (coords in metres → natural px → screen px)
                 state.gridPoints.forEach { pt ->
-                    val xPx = startX + pt.x.toFloat() * state.gridScale
-                    val yPx = startY + pt.y.toFloat() * state.gridScale
+                    val xPx = startX + pt.x.toFloat() * state.gridScale * fitScale
+                    val yPx = startY + pt.y.toFloat() * state.gridScale * fitScale
                     drawCircle(
                         color = Color(0xFF3B82F6).copy(alpha = 0.55f),
                         radius = 4f,
@@ -187,10 +203,29 @@ fun MapScreen(
 
                 // AP markers (drawn on top of grid)
                 state.placedAps.forEach { ap ->
-                    val xPx = startX + ap.x.toFloat() * SCALE_PX_PER_M
-                    val yPx = startY + ap.y.toFloat() * SCALE_PX_PER_M
+                    val xPx = startX + ap.x.toFloat() * SCALE_PX_PER_M * fitScale
+                    val yPx = startY + ap.y.toFloat() * SCALE_PX_PER_M * fitScale
                     drawApMarker(this, xPx, yPx, Orange)
                 }
+            }
+        }
+
+        // Floor plan error banner — visible on top of grid
+        if (state.floorPlanUrl == null && state.floorPlanError != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f))
+                    .padding(10.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    state.floorPlanError!!,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    fontSize = 11.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
         }
 
@@ -210,19 +245,18 @@ fun MapScreen(
     }
 
     // Confirm placement sheet
-    val bestAp = state.pendingBestAp
-    val tapM   = state.pendingTapM
-    if (state.showConfirmSheet && bestAp != null && tapM != null) {
+    val tapM = state.pendingTapM
+    if (state.showConfirmSheet && state.pendingGroup.isNotEmpty() && tapM != null) {
         ModalBottomSheet(
             onDismissRequest = { viewModel.cancelPlacement() },
             sheetState = sheetState,
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
         ) {
             ConfirmPlacementSheet(
-                bestAp = bestAp,
-                tapM = tapM,
+                group  = state.pendingGroup,
+                tapM   = tapM,
                 onConfirm = { viewModel.confirmPlacement() },
-                onCancel = { viewModel.cancelPlacement() },
+                onCancel  = { viewModel.cancelPlacement() },
             )
         }
     }
@@ -240,15 +274,21 @@ fun drawApMarker(scope: DrawScope, xPx: Float, yPx: Float, color: Color) {
 
 @Composable
 fun ConfirmPlacementSheet(
-    bestAp: ScannedAp,
+    group: List<ScannedAp>,
     tapM: Pair<Double, Double>,
     onConfirm: () -> Unit,
     onCancel: () -> Unit,
 ) {
+    val primary = group.first()
+    val posStr  = "(${String.format("%.1f", tapM.first)} m, ${String.format("%.1f", tapM.second)} m)"
+
     Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
         Text("Confirm AP Location", fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Text(
-            "The strongest visible AP will be recorded at this position.",
+            if (group.size == 1)
+                "The strongest visible AP will be recorded at this position."
+            else
+                "${group.size} BSSIDs from the same physical AP will be recorded at this position.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
@@ -261,13 +301,39 @@ fun ConfirmPlacementSheet(
             shape = RoundedCornerShape(8.dp),
         ) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("STRONGEST AP", fontSize = 10.sp, color = Green, fontWeight = FontWeight.Bold)
+                Text(
+                    if (group.size == 1) "STRONGEST AP" else "AP GROUP  (${group.size} BSSIDs)",
+                    fontSize = 10.sp, color = Green, fontWeight = FontWeight.Bold,
+                )
+                StatRow("SSID",     primary.ssid)
+                StatRow("Position", posStr)
+                Spacer(Modifier.height(4.dp))
+                // List every BSSID in the group
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    items(group) { ap ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                ap.bssid,
+                                fontSize = 11.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                            )
+                            Text(
+                                "${ap.rssi} dBm",
+                                fontSize = 11.sp,
+                                color = rssiColor(ap.rssi),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                 }
-                StatRow("SSID",  bestAp.ssid)
-                StatRow("BSSID", bestAp.bssid)
-                StatRow("RSSI",  "${bestAp.rssi} dBm", color = rssiColor(bestAp.rssi))
-                StatRow("Position", "(${String.format("%.1f", tapM.first)} m, ${String.format("%.1f", tapM.second)} m)")
             }
         }
 
@@ -277,7 +343,7 @@ fun ConfirmPlacementSheet(
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = Green),
         ) {
-            Text("Save AP at this location")
+            Text(if (group.size == 1) "Save AP at this location" else "Save ${group.size} BSSIDs at this location")
         }
         OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
             Text("Cancel")

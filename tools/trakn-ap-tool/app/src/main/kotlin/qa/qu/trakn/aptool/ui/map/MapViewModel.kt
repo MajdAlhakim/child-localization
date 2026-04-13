@@ -17,6 +17,7 @@ import qa.qu.trakn.aptool.data.models.AccessPoint
 import qa.qu.trakn.aptool.data.models.GridPoint
 import qa.qu.trakn.aptool.data.models.PostApRequest
 import qa.qu.trakn.aptool.data.models.ScannedAp
+import java.util.UUID
 
 private const val TAG = "MapViewModel"
 
@@ -32,6 +33,7 @@ data class MapUiState(
     // Tap-to-record flow
     val pendingTapM: Pair<Double, Double>? = null,   // (xm, ym) chosen by user tap
     val pendingBestAp: ScannedAp? = null,            // strongest AP at tap time
+    val pendingGroup: List<ScannedAp> = emptyList(), // all BSSIDs from same physical AP (subnet)
     val showConfirmSheet: Boolean = false,
     // Grid overlay
     val gridPoints: List<GridPoint> = emptyList(),
@@ -131,64 +133,100 @@ class MapViewModel(
         }
     }
 
+    /** Returns the first 5 octets of a BSSID (the subnet prefix for the physical AP). */
+    private fun macPrefix(bssid: String): String =
+        bssid.split(":").take(5).joinToString(":")
+
     /**
      * Called when the user taps a location on the floor plan.
-     * [currentBestAp] is the strongest visible AP passed in from the ScanViewModel.
+     * [currentBestAp] is the strongest visible AP.
+     * [allAps] is the full current scan list — used to find every BSSID sharing the same
+     * physical AP (identical first 5 MAC octets = same subnet).
      */
-    fun onMapTap(xPx: Float, yPx: Float, currentBestAp: ScannedAp?) {
+    fun onMapTap(xPx: Float, yPx: Float, currentBestAp: ScannedAp?, allAps: List<ScannedAp>) {
         val xm = xPx / SCALE_PX_PER_M
         val ym = yPx / SCALE_PX_PER_M
         if (currentBestAp == null) {
             _state.update { it.copy(snackbarMsg = "No APs visible — wait for scan to complete") }
             return
         }
+        val prefix = macPrefix(currentBestAp.bssid)
+        val group  = allAps.filter { macPrefix(it.bssid) == prefix }
+                           .sortedByDescending { it.rssi }
+                           .ifEmpty { listOf(currentBestAp) }
         _state.update {
             it.copy(
-                pendingTapM = Pair(xm.toDouble(), ym.toDouble()),
-                pendingBestAp = currentBestAp,
+                pendingTapM    = Pair(xm.toDouble(), ym.toDouble()),
+                pendingBestAp  = currentBestAp,
+                pendingGroup   = group,
                 showConfirmSheet = true,
             )
         }
     }
 
     fun cancelPlacement() {
-        _state.update { it.copy(showConfirmSheet = false, pendingTapM = null, pendingBestAp = null) }
+        _state.update {
+            it.copy(
+                showConfirmSheet = false,
+                pendingTapM      = null,
+                pendingBestAp    = null,
+                pendingGroup     = emptyList(),
+            )
+        }
     }
 
     fun confirmPlacement() {
-        val s = _state.value
-        val ap = s.pendingBestAp ?: return
+        val s     = _state.value
         val (xm, ym) = s.pendingTapM ?: return
+        val group = s.pendingGroup.ifEmpty { listOfNotNull(s.pendingBestAp) }
+        if (group.isEmpty()) return
 
         viewModelScope.launch {
             try {
                 val settings = settingsRepo.settings.first()
-                val api = RetrofitClient.get(settings.apiBaseUrl)
-                val req = PostApRequest(
-                    bssid = ap.bssid,
-                    ssid = ap.ssid,
-                    rssiRef = ap.rssi.toDouble(),
-                    pathLossN = 2.7,
-                    x = xm,
-                    y = ym,
-                )
-                api.postAp(settings.apiKey, req)
+                val api      = RetrofitClient.get(settings.apiBaseUrl)
+                // All BSSIDs from the same physical AP share one group_id
+                val groupId  = UUID.randomUUID().toString()
+                val newAps   = mutableListOf<AccessPoint>()
 
-                val newAp = AccessPoint(
-                    bssid = ap.bssid,
-                    ssid = ap.ssid,
-                    rssiRef = ap.rssi.toDouble(),
-                    pathLossN = 2.7,
-                    x = xm,
-                    y = ym,
-                )
+                for (ap in group) {
+                    api.postAp(
+                        settings.apiKey,
+                        PostApRequest(
+                            bssid     = ap.bssid,
+                            ssid      = ap.ssid,
+                            rssiRef   = ap.rssi.toDouble(),
+                            pathLossN = 2.7,
+                            x         = xm,
+                            y         = ym,
+                            groupId   = groupId,
+                        )
+                    )
+                    newAps.add(AccessPoint(
+                        bssid     = ap.bssid,
+                        ssid      = ap.ssid,
+                        rssiRef   = ap.rssi.toDouble(),
+                        pathLossN = 2.7,
+                        x         = xm,
+                        y         = ym,
+                    ))
+                }
+
+                val primary = group.first()
+                val msg = if (group.size == 1) {
+                    "Saved: ${primary.ssid} (${primary.bssid}) at (${String.format("%.1f", xm)}, ${String.format("%.1f", ym)}) m"
+                } else {
+                    "Saved ${group.size} BSSIDs for ${primary.ssid} at (${String.format("%.1f", xm)}, ${String.format("%.1f", ym)}) m"
+                }
+
                 _state.update {
                     it.copy(
-                        placedAps = (it.placedAps + newAp).distinctBy { a -> a.bssid },
+                        placedAps        = (it.placedAps + newAps).distinctBy { a -> a.bssid },
                         showConfirmSheet = false,
-                        pendingTapM = null,
-                        pendingBestAp = null,
-                        snackbarMsg = "Saved: ${ap.ssid} (${ap.bssid}) at (${String.format("%.1f", xm)}, ${String.format("%.1f", ym)}) m",
+                        pendingTapM      = null,
+                        pendingBestAp    = null,
+                        pendingGroup     = emptyList(),
+                        snackbarMsg      = msg,
                     )
                 }
             } catch (e: Exception) {

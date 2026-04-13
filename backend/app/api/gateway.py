@@ -4,7 +4,7 @@ backend/app/api/gateway.py
 POST /api/v1/gateway/packet
 
 Receives JSON packets from the XIAO ESP32-C5 tag.
-Packet format (PRD §6.2 / §16.1):
+Packet format:
 {
     "mac":  "24:42:E3:15:E5:72",
     "ts":   12450,
@@ -25,6 +25,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..fusion.device_state import DeviceState
+from ..fusion.tag_registry import registry
 from ..core.broadcaster import broadcaster
 
 logger = logging.getLogger("trakn.gateway")
@@ -41,7 +42,7 @@ router = APIRouter()
 device_states: dict[str, DeviceState] = {}
 
 
-# ── Pydantic models (PRD §6.2) ────────────────────────────────────────────────
+# ── Pydantic models  ────────────────────────────────────────────────
 
 class ImuSample(BaseModel):
     ts: int            # device milliseconds
@@ -107,10 +108,12 @@ async def receive_packet(
             ap.ch,
         )
 
-    # ── Get or create device state ────────────────────────────────────────────
+    # ── Register MAC → tag_id and get/create device state ────────────────────
+    tag_id = registry.register(mac)   # no-op if already known
+    registry.touch(mac)
     if mac not in device_states:
         device_states[mac] = DeviceState(mac=mac)
-        logger.info("  NEW device registered: %s", mac)
+        logger.info("  NEW device  mac=%s  tag_id=%s", mac, tag_id)
     state = device_states[mac]
     state.last_seen_ts = time.time()
 
@@ -139,7 +142,8 @@ async def receive_packet(
             msg["source"]     = "pdr_only"
             msg["mode"]       = "imu_only"
             msg["confidence"] = 0.0
-            await broadcaster.broadcast(mac, msg)
+            msg["tag_id"]     = tag_id
+            await broadcaster.broadcast(tag_id, msg)
 
     # ── Log PDR output ────────────────────────────────────────────────────────
     if pdr_result:
@@ -151,7 +155,7 @@ async def receive_packet(
             pdr_result["bias_calibrated"],
         )
 
-    # ── Response (PRD §16.1) ──────────────────────────────────────────────────
+    # ── Response ──────────────────────────────────────────────────
     return {
         "status":      "ok",
         "mac":         mac,
