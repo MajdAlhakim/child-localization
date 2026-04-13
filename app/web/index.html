@@ -830,14 +830,21 @@
 'use strict';
 
 // ════════════════════════════════════════════════════════════
+// URL routing — detect mode FIRST so Konva is never loaded in
+// dashboard mode (avoids crashing when CDN is slow / blocked)
+// ════════════════════════════════════════════════════════════
+const CURRENT_FP_ID = new URLSearchParams(location.search).get('fp');
+
+// ════════════════════════════════════════════════════════════
 // Constants
 // ════════════════════════════════════════════════════════════
 const API_BASE = '';
 const API_KEY  = '580a92b1cad8ad81b7ae90c23fb222443d9c87aac4ce4a7728a3f9e99e3e4990';
 
-// fpUrl() is defined later after URL routing — provide a guard so dashboard
-// code that loads before routing doesn't blow up if somehow called.
-function fpUrl(path) { return path; } // overridden in tool mode
+// fpUrl scoped to the active floor plan (only used in tool mode)
+function fpUrl(path) {
+  return CURRENT_FP_ID ? `/api/v1/floor-plans/${CURRENT_FP_ID}${path}` : path;
+}
 const SNAP_RADIUS = 14; // screen pixels
 
 // ════════════════════════════════════════════════════════════
@@ -927,103 +934,104 @@ function toast(msg, type = 'info', duration = 4000) {
 }
 
 // ════════════════════════════════════════════════════════════
-// Konva Setup
+// Konva Setup  — only in tool mode; dashboard never needs it
 // ════════════════════════════════════════════════════════════
-const wrapper = document.getElementById('canvas-wrapper');
-const stage = new Konva.Stage({
-  container: 'canvas-container',
-  width: wrapper.offsetWidth,
-  height: wrapper.offsetHeight,
-});
-
-// Layers
-const bgLayer       = new Konva.Layer({ name: 'bg' });
-const heatmapLayer  = new Konva.Layer({ name: 'heatmap' });
-const gridLayer     = new Konva.Layer({ name: 'grid' });
-const polyLayer     = new Konva.Layer({ name: 'poly' });
-const apLayer       = new Konva.Layer({ name: 'ap' });
-const drawingLayer  = new Konva.Layer({ name: 'drawing' });
-const overlayLayer  = new Konva.Layer({ name: 'overlay' });
-
-stage.add(bgLayer);
-stage.add(heatmapLayer);
-stage.add(gridLayer);
-stage.add(polyLayer);
-stage.add(apLayer);
-stage.add(drawingLayer);
-stage.add(overlayLayer);
-
-// Zoom & pan state
+let stage, wrapper, bgLayer, heatmapLayer, gridLayer, polyLayer, apLayer, drawingLayer, overlayLayer;
 let zoomLevel = 1;
 let stageOffset = { x: 0, y: 0 };
 let isPanning = false;
 let panStart = null;
 let vKeyDown = false;
 
-// Resize
-window.addEventListener('resize', () => {
-  stage.width(wrapper.offsetWidth);
-  stage.height(wrapper.offsetHeight);
-});
-
-// ── Zoom ──
-stage.on('wheel', (e) => {
-  e.evt.preventDefault();
-  const oldScale = zoomLevel;
-  const pointer = stage.getPointerPosition();
-  const scaleBy = 1.08;
-  zoomLevel = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-  zoomLevel = Math.max(0.05, Math.min(zoomLevel, 40));
-
-  const mousePointTo = {
-    x: (pointer.x - stage.x()) / oldScale,
-    y: (pointer.y - stage.y()) / oldScale,
-  };
-  stage.scale({ x: zoomLevel, y: zoomLevel });
-  stage.position({
-    x: pointer.x - mousePointTo.x * zoomLevel,
-    y: pointer.y - mousePointTo.y * zoomLevel,
+if (CURRENT_FP_ID) {
+  wrapper = document.getElementById('canvas-wrapper');
+  stage = new Konva.Stage({
+    container: 'canvas-container',
+    width: wrapper.offsetWidth,
+    height: wrapper.offsetHeight,
   });
-  stage.batchDraw();
-  updateZoomDisplay();
-});
 
-// ── Pan (middle mouse or V+drag) ──
-stage.on('mousedown', (e) => {
-  if (e.evt.button === 1 || (e.evt.button === 0 && vKeyDown)) {
-    isPanning = true;
-    panStart = { x: e.evt.clientX - stage.x(), y: e.evt.clientY - stage.y() };
-    stage.container().style.cursor = 'grabbing';
+  bgLayer       = new Konva.Layer({ name: 'bg' });
+  heatmapLayer  = new Konva.Layer({ name: 'heatmap' });
+  gridLayer     = new Konva.Layer({ name: 'grid' });
+  polyLayer     = new Konva.Layer({ name: 'poly' });
+  apLayer       = new Konva.Layer({ name: 'ap' });
+  drawingLayer  = new Konva.Layer({ name: 'drawing' });
+  overlayLayer  = new Konva.Layer({ name: 'overlay' });
+
+  stage.add(bgLayer);
+  stage.add(heatmapLayer);
+  stage.add(gridLayer);
+  stage.add(polyLayer);
+  stage.add(apLayer);
+  stage.add(drawingLayer);
+  stage.add(overlayLayer);
+
+  // Resize
+  window.addEventListener('resize', () => {
+    stage.width(wrapper.offsetWidth);
+    stage.height(wrapper.offsetHeight);
+  });
+
+  // ── Zoom ──
+  stage.on('wheel', (e) => {
     e.evt.preventDefault();
-  }
-});
-stage.on('mousemove', (e) => {
-  if (isPanning) {
+    const oldScale = zoomLevel;
+    const pointer = stage.getPointerPosition();
+    const scaleBy = 1.08;
+    zoomLevel = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+    zoomLevel = Math.max(0.05, Math.min(zoomLevel, 40));
+
+    const mousePointTo = {
+      x: (pointer.x - stage.x()) / oldScale,
+      y: (pointer.y - stage.y()) / oldScale,
+    };
+    stage.scale({ x: zoomLevel, y: zoomLevel });
     stage.position({
-      x: e.evt.clientX - panStart.x,
-      y: e.evt.clientY - panStart.y,
+      x: pointer.x - mousePointTo.x * zoomLevel,
+      y: pointer.y - mousePointTo.y * zoomLevel,
     });
     stage.batchDraw();
-  }
-});
-window.addEventListener('mouseup', (e) => {
-  if (isPanning) {
-    isPanning = false;
-    stage.container().style.cursor = S.tool === 'draw' ? 'crosshair' : 'default';
-  }
-});
+    updateZoomDisplay();
+  });
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'v' || e.key === 'V') vKeyDown = true;
-  if (e.key === 'w' || e.key === 'W') setTool('draw');
-  if (e.key === 'e' || e.key === 'E') setTool('erase');
-  if (e.key === 's' || e.key === 'S') setTool('select');
-  if (e.key === 'g' || e.key === 'G') toggleGridVisibility();
-  if (e.key === 'Escape') cancelDrawing();
-});
-document.addEventListener('keyup', (e) => {
-  if (e.key === 'v' || e.key === 'V') vKeyDown = false;
-});
+  // ── Pan (middle mouse or V+drag) ──
+  stage.on('mousedown', (e) => {
+    if (e.evt.button === 1 || (e.evt.button === 0 && vKeyDown)) {
+      isPanning = true;
+      panStart = { x: e.evt.clientX - stage.x(), y: e.evt.clientY - stage.y() };
+      stage.container().style.cursor = 'grabbing';
+      e.evt.preventDefault();
+    }
+  });
+  stage.on('mousemove', (e) => {
+    if (isPanning) {
+      stage.position({
+        x: e.evt.clientX - panStart.x,
+        y: e.evt.clientY - panStart.y,
+      });
+      stage.batchDraw();
+    }
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (isPanning) {
+      isPanning = false;
+      stage.container().style.cursor = S.tool === 'draw' ? 'crosshair' : 'default';
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'v' || e.key === 'V') vKeyDown = true;
+    if (e.key === 'w' || e.key === 'W') setTool('draw');
+    if (e.key === 'e' || e.key === 'E') setTool('erase');
+    if (e.key === 's' || e.key === 'S') setTool('select');
+    if (e.key === 'g' || e.key === 'G') toggleGridVisibility();
+    if (e.key === 'Escape') cancelDrawing();
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'v' || e.key === 'V') vKeyDown = false;
+  });
+} // end tool-mode Konva setup
 
 function updateZoomDisplay() {
   document.getElementById('zoom-display').textContent = Math.round(zoomLevel * 100) + '%';
@@ -2040,16 +2048,8 @@ function updateStatusBar() {
 }
 
 // ════════════════════════════════════════════════════════════
-// URL Routing  — dashboard vs. mapping tool
+// Page init — tool mode vs. dashboard mode
 // ════════════════════════════════════════════════════════════
-const _urlParams    = new URLSearchParams(location.search);
-const CURRENT_FP_ID = _urlParams.get('fp');
-
-// Override the stub defined above — now we know the real floor plan ID
-if (CURRENT_FP_ID) {
-  window.fpUrl = (path) => `/api/v1/floor-plans/${CURRENT_FP_ID}${path}`;
-}
-
 if (CURRENT_FP_ID) {
   // ── Show mapping tool ──────────────────────────────────
   document.getElementById('tool').style.display = 'flex';
