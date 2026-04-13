@@ -133,15 +133,31 @@ class MapViewModel(
         }
     }
 
-    /** Returns the first 5 octets of a BSSID (the subnet prefix for the physical AP). */
-    private fun macPrefix(bssid: String): String =
-        bssid.split(":").take(5).joinToString(":")
+    /**
+     * Group key for a BSSID.
+     * Two BSSIDs belong to the same physical AP if:
+     *   1. Their first 5 octets are identical (same subnet), AND
+     *   2. The last character of their last octet is the same class:
+     *        - letter (a–f)  → one radio chain
+     *        - digit  (0–9)  → another radio chain
+     *
+     * Example: 24:16:1b:76:07:6d and 24:16:1b:76:07:6c  → same group ("…:letter")
+     *          24:16:1b:76:07:63 and 24:16:1b:76:07:60  → same group ("…:digit")
+     *          but 24:16:1b:76:07:6d vs 24:16:1b:76:07:63 → DIFFERENT groups
+     */
+    private fun macGroup(bssid: String): String {
+        val parts    = bssid.split(":")
+        val prefix   = parts.take(5).joinToString(":")
+        val lastChar = bssid.trimEnd().lastOrNull() ?: return prefix
+        val cls      = if (lastChar.isLetter()) "alpha" else "digit"
+        return "$prefix:$cls"
+    }
 
     /**
      * Called when the user taps a location on the floor plan.
      * [currentBestAp] is the strongest visible AP.
      * [allAps] is the full current scan list — used to find every BSSID sharing the same
-     * physical AP (identical first 5 MAC octets = same subnet).
+     * physical AP (identical first 5 MAC octets AND same last-octet character class).
      */
     fun onMapTap(xPx: Float, yPx: Float, currentBestAp: ScannedAp?, allAps: List<ScannedAp>) {
         val xm = xPx / SCALE_PX_PER_M
@@ -150,8 +166,7 @@ class MapViewModel(
             _state.update { it.copy(snackbarMsg = "No APs visible — wait for scan to complete") }
             return
         }
-        val prefix = macPrefix(currentBestAp.bssid)
-        val group  = allAps.filter { macPrefix(it.bssid) == prefix }
+        val group  = allAps.filter { macGroup(it.bssid) == macGroup(currentBestAp.bssid) }
                            .sortedByDescending { it.rssi }
                            .ifEmpty { listOf(currentBestAp) }
         _state.update {
