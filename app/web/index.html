@@ -365,7 +365,7 @@
 
   /* ── Dashboard ── */
   #dashboard {
-    display: none;
+    display: flex;
     flex-direction: column;
     height: 100vh;
     background: var(--bg);
@@ -2051,7 +2051,8 @@ function updateStatusBar() {
 // Page init — tool mode vs. dashboard mode
 // ════════════════════════════════════════════════════════════
 if (CURRENT_FP_ID) {
-  // ── Show mapping tool ──────────────────────────────────
+  // ── Show mapping tool, hide dashboard ─────────────────
+  document.getElementById('dashboard').style.display = 'none';
   document.getElementById('tool').style.display = 'flex';
   document.getElementById('tool-context-bar').style.display = 'flex';
 
@@ -2097,8 +2098,7 @@ if (CURRENT_FP_ID) {
   })();
 
 } else {
-  // ── Show dashboard ─────────────────────────────────────
-  document.getElementById('dashboard').style.display = 'flex';
+  // Dashboard is visible by default (CSS display:flex)
   initDashboard();
 }
 
