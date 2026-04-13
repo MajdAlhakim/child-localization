@@ -1916,9 +1916,9 @@ function renderChecklist() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Canvas click handler
+// Canvas click handler  (tool mode only)
 // ════════════════════════════════════════════════════════════
-stage.on('click', (e) => {
+if (CURRENT_FP_ID) stage.on('click', (e) => {
   if (isPanning) return;
   if (e.evt.button !== 0) return; // only left click
 
@@ -1999,7 +1999,7 @@ stage.on('click', (e) => {
 });
 
 // Right-click — remove last vertex
-stage.on('contextmenu', (e) => {
+if (CURRENT_FP_ID) stage.on('contextmenu', (e) => {
   e.evt.preventDefault();
   if (S.tool === 'draw' && S.drawing.active) {
     S.drawing.vertices.pop();
@@ -2012,7 +2012,7 @@ stage.on('contextmenu', (e) => {
 });
 
 // Mouse move — preview line
-stage.on('mousemove', (e) => {
+if (CURRENT_FP_ID) stage.on('mousemove', (e) => {
   if (S.tool !== 'draw' || !S.drawing.active || isPanning) return;
   const pos = stage.getPointerPosition();
   const canvasPos = stageToCanvas(pos);
