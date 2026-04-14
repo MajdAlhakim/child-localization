@@ -316,17 +316,22 @@ async def compute_radio_map(
 ) -> dict[str, str]:
     _check_key(x_api_key)
     fp = await _active_fp(db, x_floor_plan_id)
-    # Use select() instead of db.get() to force a fresh query that properly
-    # loads relationships via selectinload. db.get() with options can return
-    # the identity-map cached object without relationships in async context,
-    # causing MissingGreenlet errors when the relationships are accessed.
+    fp_id = fp.id  # capture id before any session expiry
+
+    # selectinload + populate_existing=True forces SQLAlchemy to run the
+    # secondary SELECTs for grid_points and access_points even when the
+    # FloorPlan object is already cached in the session identity map.
+    # Without populate_existing the cached object is returned without
+    # relationships, and accessing them triggers lazy-load which raises
+    # MissingGreenlet under asyncpg.
     result = await db.execute(
         select(FloorPlan)
         .options(
             selectinload(FloorPlan.grid_points),
             selectinload(FloorPlan.access_points),
         )
-        .where(FloorPlan.id == fp.id)
+        .where(FloorPlan.id == fp_id)
+        .execution_options(populate_existing=True)
     )
     fp_full = result.scalar_one_or_none()
     if not fp_full:
