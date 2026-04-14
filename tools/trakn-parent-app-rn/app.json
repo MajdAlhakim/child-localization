@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "TRAKN Parent",
+    "slug": "trakn-parent-app-rn",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "traknparent",
+    "icon": "./assets/icon.png",
+    "splash": {
+      "backgroundColor": "#060a10"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#060a10"
+      },
+      "package": "qa.qu.trakn.parent.rn",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.CHANGE_WIFI_STATE",
+        "android.permission.INTERNET",
+        "android.permission.CHANGE_NETWORK_STATE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "minSdkVersion": 24
+          }
+        }
+      ]
+    ]
+  }
+}
