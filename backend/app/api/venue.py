@@ -316,10 +316,21 @@ async def compute_radio_map(
 ) -> dict[str, str]:
     _check_key(x_api_key)
     fp = await _active_fp(db, x_floor_plan_id)
-    fp_full = await db.get(FloorPlan, fp.id, options=[
-        selectinload(FloorPlan.grid_points),
-        selectinload(FloorPlan.access_points),
-    ])
+    # Use select() instead of db.get() to force a fresh query that properly
+    # loads relationships via selectinload. db.get() with options can return
+    # the identity-map cached object without relationships in async context,
+    # causing MissingGreenlet errors when the relationships are accessed.
+    result = await db.execute(
+        select(FloorPlan)
+        .options(
+            selectinload(FloorPlan.grid_points),
+            selectinload(FloorPlan.access_points),
+        )
+        .where(FloorPlan.id == fp.id)
+    )
+    fp_full = result.scalar_one_or_none()
+    if not fp_full:
+        raise HTTPException(status_code=404, detail="Floor plan not found")
     if not fp_full.grid_points:
         raise HTTPException(status_code=422, detail="No grid stored. Save the grid first.")
     if not fp_full.access_points:
