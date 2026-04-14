@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg:            #060a10;
+    --bg2:           #0b1019;
+    --bg3:           #111824;
+    --bg4:           #18222f;
+    --border:        #1e2e42;
+    --border-subtle: #162030;
+    --text:          #d0dbe8;
+    --text-muted:    #526a85;
+    --text-dim:      #334558;
+    --primary:       #7c3aed;
+    --primary-b:     #a78bfa;
+    --primary-dim:   rgba(124,58,237,0.12);
+    --primary-glow:  rgba(124,58,237,0.25);
+    --green:         #22c55e;
+    --green-dim:     rgba(34,197,94,0.1);
+    --red:           #ef4444;
+    --red-dim:       rgba(239,68,68,0.1);
+    --orange:        #f97316;
+    --orange-dim:    rgba(249,115,22,0.1);
+    --yellow:        #eab308;
+    --radius:        5px;
+    --radius-lg:     8px;
+    --shadow:        0 2px 12px rgba(0,0,0,0.4);
+    --shadow-lg:     0 8px 32px rgba(0,0,0,0.5);
+    --ease:          cubic-bezier(0.2,0,0,1);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Fira Sans', system-ui, sans-serif;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    height: 100dvh;
+  }
+
+  #root {
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+@layer components {
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border); }
+
+  /* ── Panel input ── */
+  .panel-input {
+    @apply w-full text-xs font-mono outline-none transition-all duration-150;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 8px;
+    border-radius: var(--radius);
+  }
+  .panel-input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-dim);
+  }
+  .panel-input.error {
+    border-color: var(--red);
+    box-shadow: 0 0 0 2px var(--red-dim);
+  }
+
+  /* ── Panel select ── */
+  .panel-select {
+    @apply w-full text-xs outline-none transition-all duration-150;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 8px;
+    border-radius: var(--radius);
+  }
+  .panel-select:focus { border-color: var(--primary); }
+
+  /* ── Primary button ── */
+  .btn-primary {
+    @apply w-full text-xs font-semibold text-white cursor-pointer select-none transition-all duration-150;
+    padding: 7px;
+    background: var(--primary);
+    border: none;
+    border-radius: var(--radius);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.2);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px var(--primary-glow);
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0); filter: brightness(0.95); }
+  .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── Secondary button ── */
+  .btn-secondary {
+    @apply w-full text-xs font-medium cursor-pointer select-none transition-all duration-150;
+    padding: 6px;
+    margin-top: 4px;
+    background: var(--bg4);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary-b);
+    background: var(--primary-dim);
+    transform: translateY(-1px);
+  }
+  .btn-secondary:active:not(:disabled) { transform: translateY(0); }
+  .btn-secondary.danger:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+  .btn-secondary:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  /* ── Icon button ── */
+  .icon-btn {
+    @apply flex items-center justify-center flex-shrink-0 cursor-pointer select-none transition-all duration-150;
+    width: 26px; height: 26px;
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .icon-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary-b);
+    background: var(--primary-dim);
+    transform: scale(1.1);
+  }
+  .icon-btn:active { transform: scale(0.95); }
+  .icon-btn.danger:hover { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+
+  /* ── Tool button ── */
+  .tool-btn {
+    @apply text-xs font-mono font-medium cursor-pointer select-none transition-all duration-150 whitespace-nowrap;
+    padding: 4px 10px;
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: var(--radius);
+  }
+  .tool-btn:hover { border-color: var(--primary); color: var(--primary-b); background: var(--primary-dim); transform: translateY(-1px); }
+  .tool-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 2px 8px var(--primary-glow); }
+
+  /* ── Progress bar ── */
+  .progress-wrap { background: var(--bg3); border-radius: 4px; height: 6px; overflow: hidden; margin: 8px 0; }
+  .progress-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--primary), var(--primary-b)); transition: width 0.4s var(--ease); }
+
+  /* ── Badge ── */
+  .step-badge {
+    @apply text-xs font-mono font-medium whitespace-nowrap flex-shrink-0;
+    padding: 2px 6px; border-radius: 10px;
+    background: var(--bg4); color: var(--text-dim); border: 1px solid var(--border);
+    transition: all 0.2s;
+  }
+  .step-badge.ok { background: var(--green-dim); color: var(--green); border-color: var(--green); }
+  .step-badge.warn { background: rgba(234,179,8,0.1); color: var(--yellow); border-color: var(--yellow); }
+
+  /* ── Spinner ── */
+  .spinner {
+    display: inline-block; width: 12px; height: 12px;
+    border: 2px solid var(--border); border-top-color: var(--primary);
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+}
