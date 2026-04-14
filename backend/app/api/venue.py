@@ -316,35 +316,23 @@ async def compute_radio_map(
 ) -> dict[str, str]:
     _check_key(x_api_key)
     fp = await _active_fp(db, x_floor_plan_id)
-    fp_id = fp.id  # capture id before any session expiry
 
-    # selectinload + populate_existing=True forces SQLAlchemy to run the
-    # secondary SELECTs for grid_points and access_points even when the
-    # FloorPlan object is already cached in the session identity map.
-    # Without populate_existing the cached object is returned without
-    # relationships, and accessing them triggers lazy-load which raises
-    # MissingGreenlet under asyncpg.
-    result = await db.execute(
-        select(FloorPlan)
-        .options(
-            selectinload(FloorPlan.grid_points),
-            selectinload(FloorPlan.access_points),
-        )
-        .where(FloorPlan.id == fp_id)
-        .execution_options(populate_existing=True)
-    )
-    fp_full = result.scalar_one_or_none()
-    if not fp_full:
-        raise HTTPException(status_code=404, detail="Floor plan not found")
-    if not fp_full.grid_points:
+    # await db.refresh() explicitly reloads the relationship collections in
+    # the async context. selectinload secondary SELECTs fire outside the
+    # greenlet when the object is already in the identity map, causing
+    # MissingGreenlet. refresh() is directly awaited so it always runs
+    # inside the correct async context.
+    await db.refresh(fp, ['grid_points', 'access_points'])
+
+    if not fp.grid_points:
         raise HTTPException(status_code=422, detail="No grid stored. Save the grid first.")
-    if not fp_full.access_points:
+    if not fp.access_points:
         raise HTTPException(status_code=422, detail="No APs stored. Place APs first.")
 
-    points  = [{"x": p.x, "y": p.y} for p in fp_full.grid_points]
+    points  = [{"x": p.x, "y": p.y} for p in fp.grid_points]
     aps     = [{"bssid": a.bssid, "x": a.x, "y": a.y,
                 "rssi_ref": a.rssi_ref, "path_loss_n": a.path_loss_n,
-                "ceiling_height": a.ceiling_height} for a in fp_full.access_points]
+                "ceiling_height": a.ceiling_height} for a in fp.access_points]
 
     task_id = str(uuid.uuid4())
     _task_store[task_id] = {"status": "computing", "progress": 0}
