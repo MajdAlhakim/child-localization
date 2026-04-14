@@ -363,188 +363,39 @@
 
   .sep { height: 1px; background: var(--border); margin: 6px 0; }
 
-  /* ── Dashboard ── */
-  #dashboard {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    background: var(--bg);
+  /* ── Venue selector ── */
+  .venue-row { display: flex; gap: 4px; align-items: center; }
+  .venue-select {
+    flex: 1; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 6px; border-radius: 3px; font-size: 11px; outline: none;
   }
-  #dash-header {
-    height: 52px;
-    background: var(--bg2);
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center;
-    padding: 0 20px; gap: 16px; flex-shrink: 0;
-  }
-  #dash-header .logo { font-family: var(--mono); font-size: 16px; font-weight: bold; color: var(--accent); letter-spacing: 2px; }
-  #dash-header .logo span { color: var(--text-muted); font-size: 11px; letter-spacing: 1px; margin-left: 6px; }
-  #dash-body { flex: 1; overflow-y: auto; padding: 24px; }
-  .dash-section-title {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
-    color: var(--text-dim); margin-bottom: 14px; font-family: var(--mono);
-  }
-  #venues-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-  .venue-card {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
-    overflow: hidden; transition: border-color 0.15s;
-  }
-  .venue-card:hover { border-color: var(--accent); }
-  .venue-card-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 16px; border-bottom: 1px solid var(--border);
-  }
-  .venue-name { font-size: 14px; font-weight: 600; color: var(--text); }
-  .venue-meta { font-size: 11px; color: var(--text-muted); font-family: var(--mono); margin-top: 2px; }
-  .venue-actions { display: flex; gap: 6px; }
-  .floor-list { padding: 8px 0; }
-  .floor-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 16px; cursor: pointer; transition: background 0.1s;
-    border-bottom: 1px solid var(--border);
-  }
-  .floor-item:last-child { border-bottom: none; }
-  .floor-item:hover { background: var(--bg3); }
-  .floor-num {
-    width: 26px; height: 26px; border-radius: 5px;
-    background: var(--accent-dim); border: 1px solid var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-family: var(--mono); color: var(--accent); flex-shrink: 0;
-  }
-  .floor-name { font-size: 12px; color: var(--text); flex: 1; }
-  .floor-badges { display: flex; gap: 5px; }
-  .floor-badge {
-    font-size: 10px; padding: 2px 6px; border-radius: 10px;
-    background: var(--bg4); color: var(--text-dim); border: 1px solid var(--border);
-    font-family: var(--mono);
-  }
-  .floor-badge.has-data { color: var(--green); border-color: var(--green); background: rgba(34,197,94,0.1); }
-  .floor-open-btn {
-    padding: 4px 10px; background: var(--accent); color: #fff;
-    border: none; border-radius: 4px; cursor: pointer; font-size: 11px;
-    white-space: nowrap;
-  }
-  .floor-open-btn:hover { opacity: 0.85; }
-  .venue-add-floor {
-    padding: 10px 16px; border-top: 1px solid var(--border);
-    display: flex; gap: 6px;
-  }
-  .dash-btn {
-    padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 11px;
-    border: 1px solid var(--border); background: var(--bg4); color: var(--text-muted);
+  .venue-select:focus { border-color: var(--accent); }
+  .icon-btn {
+    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+    background: var(--bg4); border: 1px solid var(--border); border-radius: 3px;
+    cursor: pointer; font-size: 13px; color: var(--text-muted); flex-shrink: 0;
     transition: all 0.1s;
   }
-  .dash-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .dash-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .dash-btn.primary:hover { opacity: 0.85; }
-  .dash-btn.danger:hover { border-color: var(--red); color: var(--red); }
-  .empty-state { text-align: center; padding: 48px 20px; color: var(--text-muted); }
-  .empty-state .empty-icon { font-size: 36px; margin-bottom: 12px; }
-  .empty-state p { font-size: 13px; margin-bottom: 16px; }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .icon-btn.danger:hover { border-color: var(--red); color: var(--red); }
+  .venue-status { font-size: 10px; color: var(--text-dim); margin-top: 4px; min-height: 14px; }
 
-  /* Modal */
-  .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 1000; display: none;
+  /* ── Modal ── */
+  #venue-modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65); z-index: 2000;
+    align-items: center; justify-content: center;
   }
-  .modal-backdrop.open { display: flex; }
-  .modal {
-    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
-    padding: 20px; width: 360px; max-width: 90vw;
+  .modal-box {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 20px; width: 300px;
   }
-  .modal h3 { font-size: 14px; margin-bottom: 14px; color: var(--text); }
-  .modal label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px; }
-  .modal input, .modal select {
-    width: 100%; padding: 7px 9px; background: var(--bg3);
-    border: 1px solid var(--border); border-radius: 4px;
-    color: var(--text); font-size: 12px; outline: none; margin-bottom: 10px;
-  }
-  .modal input:focus, .modal select:focus { border-color: var(--accent); }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-
-  /* Tool context banner */
-  #tool-context-bar {
-    display: none;
-    background: var(--bg3); border-bottom: 1px solid var(--border);
-    padding: 5px 14px; font-size: 11px; color: var(--text-muted);
-    font-family: var(--mono); align-items: center; gap: 10px;
-  }
-  #tool-context-bar a { color: var(--accent); text-decoration: none; }
-  #tool-context-bar a:hover { text-decoration: underline; }
-  #tool-context-bar .ctx-name { color: var(--text); }
+  .modal-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+  .modal-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+  .modal-actions .primary-btn, .modal-actions .secondary-btn { width: auto; padding: 5px 14px; }
 </style>
 </head>
 <body>
-
-<!-- ════════════════════════════════════════════════════════════
-     DASHBOARD  (shown when no ?fp= param)
-     ════════════════════════════════════════════════════════════ -->
-<div id="dashboard">
-  <div id="dash-header">
-    <div class="logo">TRAKN <span>MAPPING SYSTEM</span></div>
-    <div style="flex:1"></div>
-    <button class="dash-btn primary" onclick="showCreateVenueModal()">+ New Venue</button>
-  </div>
-  <div id="dash-body">
-    <div class="dash-section-title">Venues &amp; Floor Plans</div>
-    <div id="venues-grid">
-      <div class="empty-state">
-        <div class="empty-icon">🏢</div>
-        <p>No venues yet. Create one to start mapping.</p>
-        <button class="dash-btn primary" onclick="showCreateVenueModal()">+ Create Venue</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Create Venue Modal -->
-<div class="modal-backdrop" id="modal-create-venue">
-  <div class="modal">
-    <h3>New Venue</h3>
-    <label>Venue Name</label>
-    <input id="cv-name" placeholder="e.g. Building C, QU Library…">
-    <label>Description (optional)</label>
-    <input id="cv-desc" placeholder="Notes about this venue">
-    <div class="modal-actions">
-      <button class="dash-btn" onclick="closeModal('modal-create-venue')">Cancel</button>
-      <button class="dash-btn primary" onclick="createVenue()">Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- Add Floor Plan Modal -->
-<div class="modal-backdrop" id="modal-add-floor">
-  <div class="modal">
-    <h3>Add Floor Plan</h3>
-    <input type="hidden" id="af-venue-id">
-    <label>Floor Name</label>
-    <input id="af-name" placeholder="e.g. Ground Floor, Floor 2…">
-    <label>Floor Number</label>
-    <input id="af-num" type="number" value="1" min="0">
-    <label>Floor Plan Image (PNG / JPG / SVG)</label>
-    <input id="af-file" type="file" accept="image/png,image/jpeg,image/svg+xml">
-    <div class="modal-actions">
-      <button class="dash-btn" onclick="closeModal('modal-add-floor')">Cancel</button>
-      <button class="dash-btn primary" onclick="addFloorPlan()">Upload &amp; Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- ════════════════════════════════════════════════════════════
-     MAPPING TOOL  (shown when ?fp=<uuid> is in URL)
-     ════════════════════════════════════════════════════════════ -->
-<div id="tool" style="display:none; flex-direction:column; height:100vh;">
-
-<!-- context bar shown inside the tool -->
-<div id="tool-context-bar">
-  <a href="/tool/">← Dashboard</a>
-  <span>|</span>
-  <span id="ctx-venue" class="ctx-name">—</span>
-  <span>›</span>
-  <span id="ctx-floor" class="ctx-name">—</span>
-  <span id="ctx-fp-id" style="color:var(--text-dim); margin-left:6px;"></span>
-</div>
 
 <!-- ── Header ── -->
 <div id="header">
@@ -584,6 +435,19 @@
 
   <!-- Left Sidebar -->
   <div id="sidebar">
+    <!-- Venue Selector -->
+    <div class="sidebar-section" id="venue-section" style="padding:10px 12px">
+      <div class="tool-label">Venue</div>
+      <div class="venue-row">
+        <select id="venue-select" class="venue-select" onchange="onVenueSelectChange()">
+          <option value="">— no venues —</option>
+        </select>
+        <div class="icon-btn" onclick="showCreateVenueModal()" title="New venue">+</div>
+        <div class="icon-btn danger" onclick="deleteCurrentVenue()" title="Delete venue">✕</div>
+      </div>
+      <div class="venue-status" id="venue-status">Loading venues…</div>
+    </div>
+
     <div class="step-item active" id="step-item-1" onclick="goStep(1)">
       <div class="step-num">1</div>
       <div class="step-info">
@@ -823,6 +687,20 @@
   </div>
 </div>
 
+<!-- Venue Create Modal -->
+<div id="venue-modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">New Venue</div>
+    <input id="venue-name-input" class="panel-input" placeholder="Venue name (e.g. Building A, Floor 2)"
+      style="width:100%; margin-bottom:4px"
+      onkeydown="if(event.key==='Enter') createVenue(); if(event.key==='Escape') hideCreateVenueModal()">
+    <div class="modal-actions">
+      <button class="secondary-btn" onclick="hideCreateVenueModal()">Cancel</button>
+      <button class="primary-btn" onclick="createVenue()">Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast container -->
 <div id="toast-container"></div>
 
@@ -830,21 +708,10 @@
 'use strict';
 
 // ════════════════════════════════════════════════════════════
-// URL routing — detect mode FIRST so Konva is never loaded in
-// dashboard mode (avoids crashing when CDN is slow / blocked)
-// ════════════════════════════════════════════════════════════
-const CURRENT_FP_ID = new URLSearchParams(location.search).get('fp');
-
-// ════════════════════════════════════════════════════════════
 // Constants
 // ════════════════════════════════════════════════════════════
 const API_BASE = '';
 const API_KEY  = '580a92b1cad8ad81b7ae90c23fb222443d9c87aac4ce4a7728a3f9e99e3e4990';
-
-// fpUrl scoped to the active floor plan (only used in tool mode)
-function fpUrl(path) {
-  return CURRENT_FP_ID ? `/api/v1/floor-plans/${CURRENT_FP_ID}${path}` : path;
-}
 const SNAP_RADIUS = 14; // screen pixels
 
 // ════════════════════════════════════════════════════════════
@@ -876,13 +743,19 @@ const S = {
   tool: 'select',       // 'select' | 'draw' | 'erase'
 
   inspectMode: false,
+
+  // Venue management
+  activeVenueId: null,  // string UUID
+  activeFpId: null,     // string UUID — current floor plan
+  allVenues: [],        // cached list from server
 };
 
 // ════════════════════════════════════════════════════════════
 // API utility
 // ════════════════════════════════════════════════════════════
-async function api(method, path, body, isFormData, extraHeaders) {
-  const headers = { 'X-API-Key': API_KEY, ...(extraHeaders || {}) };
+async function api(method, path, body, isFormData) {
+  const headers = { 'X-API-Key': API_KEY };
+  if (S.activeFpId) headers['X-Floor-Plan-Id'] = S.activeFpId;
   if (!isFormData && body) headers['Content-Type'] = 'application/json';
 
   let res;
@@ -892,17 +765,18 @@ async function api(method, path, body, isFormData, extraHeaders) {
       headers,
       body: isFormData ? body : (body ? JSON.stringify(body) : undefined),
     });
-    const banner = document.getElementById('offline-banner');
-    if (banner) banner.style.display = 'none';
+    // Got a response → backend is reachable, hide the offline banner
+    document.getElementById('offline-banner').style.display = 'none';
   } catch (networkErr) {
-    const banner = document.getElementById('offline-banner');
-    if (banner) banner.style.display = 'block';
+    // fetch() itself threw → no network connection to backend at all
+    document.getElementById('offline-banner').style.display = 'block';
     throw new Error('Network error — cannot reach backend: ' + networkErr.message);
   }
 
   if (!res.ok) {
-    const banner = document.getElementById('offline-banner');
-    if (banner) banner.style.display = 'none';
+    // Backend responded but with an error status.
+    // This is NOT an offline condition; hide the banner and surface the actual error.
+    document.getElementById('offline-banner').style.display = 'none';
     let detail = '';
     try { detail = await res.text(); } catch (_) {}
     throw new Error(`Server returned ${res.status}${detail ? ': ' + detail : ''}`);
@@ -911,8 +785,8 @@ async function api(method, path, body, isFormData, extraHeaders) {
   return res;
 }
 
-async function apiJSON(method, path, body, isFormData, extraHeaders) {
-  const res = await api(method, path, body, isFormData, extraHeaders);
+async function apiJSON(method, path, body) {
+  const res = await api(method, path, body);
   return res.json();
 }
 
@@ -934,104 +808,103 @@ function toast(msg, type = 'info', duration = 4000) {
 }
 
 // ════════════════════════════════════════════════════════════
-// Konva Setup  — only in tool mode; dashboard never needs it
+// Konva Setup
 // ════════════════════════════════════════════════════════════
-let stage, wrapper, bgLayer, heatmapLayer, gridLayer, polyLayer, apLayer, drawingLayer, overlayLayer;
+const wrapper = document.getElementById('canvas-wrapper');
+const stage = new Konva.Stage({
+  container: 'canvas-container',
+  width: wrapper.offsetWidth,
+  height: wrapper.offsetHeight,
+});
+
+// Layers
+const bgLayer       = new Konva.Layer({ name: 'bg' });
+const heatmapLayer  = new Konva.Layer({ name: 'heatmap' });
+const gridLayer     = new Konva.Layer({ name: 'grid' });
+const polyLayer     = new Konva.Layer({ name: 'poly' });
+const apLayer       = new Konva.Layer({ name: 'ap' });
+const drawingLayer  = new Konva.Layer({ name: 'drawing' });
+const overlayLayer  = new Konva.Layer({ name: 'overlay' });
+
+stage.add(bgLayer);
+stage.add(heatmapLayer);
+stage.add(gridLayer);
+stage.add(polyLayer);
+stage.add(apLayer);
+stage.add(drawingLayer);
+stage.add(overlayLayer);
+
+// Zoom & pan state
 let zoomLevel = 1;
 let stageOffset = { x: 0, y: 0 };
 let isPanning = false;
 let panStart = null;
 let vKeyDown = false;
 
-if (CURRENT_FP_ID) {
-  wrapper = document.getElementById('canvas-wrapper');
-  stage = new Konva.Stage({
-    container: 'canvas-container',
-    width: wrapper.offsetWidth,
-    height: wrapper.offsetHeight,
+// Resize
+window.addEventListener('resize', () => {
+  stage.width(wrapper.offsetWidth);
+  stage.height(wrapper.offsetHeight);
+});
+
+// ── Zoom ──
+stage.on('wheel', (e) => {
+  e.evt.preventDefault();
+  const oldScale = zoomLevel;
+  const pointer = stage.getPointerPosition();
+  const scaleBy = 1.08;
+  zoomLevel = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
+  zoomLevel = Math.max(0.05, Math.min(zoomLevel, 40));
+
+  const mousePointTo = {
+    x: (pointer.x - stage.x()) / oldScale,
+    y: (pointer.y - stage.y()) / oldScale,
+  };
+  stage.scale({ x: zoomLevel, y: zoomLevel });
+  stage.position({
+    x: pointer.x - mousePointTo.x * zoomLevel,
+    y: pointer.y - mousePointTo.y * zoomLevel,
   });
+  stage.batchDraw();
+  updateZoomDisplay();
+});
 
-  bgLayer       = new Konva.Layer({ name: 'bg' });
-  heatmapLayer  = new Konva.Layer({ name: 'heatmap' });
-  gridLayer     = new Konva.Layer({ name: 'grid' });
-  polyLayer     = new Konva.Layer({ name: 'poly' });
-  apLayer       = new Konva.Layer({ name: 'ap' });
-  drawingLayer  = new Konva.Layer({ name: 'drawing' });
-  overlayLayer  = new Konva.Layer({ name: 'overlay' });
-
-  stage.add(bgLayer);
-  stage.add(heatmapLayer);
-  stage.add(gridLayer);
-  stage.add(polyLayer);
-  stage.add(apLayer);
-  stage.add(drawingLayer);
-  stage.add(overlayLayer);
-
-  // Resize
-  window.addEventListener('resize', () => {
-    stage.width(wrapper.offsetWidth);
-    stage.height(wrapper.offsetHeight);
-  });
-
-  // ── Zoom ──
-  stage.on('wheel', (e) => {
+// ── Pan (middle mouse or V+drag) ──
+stage.on('mousedown', (e) => {
+  if (e.evt.button === 1 || (e.evt.button === 0 && vKeyDown)) {
+    isPanning = true;
+    panStart = { x: e.evt.clientX - stage.x(), y: e.evt.clientY - stage.y() };
+    stage.container().style.cursor = 'grabbing';
     e.evt.preventDefault();
-    const oldScale = zoomLevel;
-    const pointer = stage.getPointerPosition();
-    const scaleBy = 1.08;
-    zoomLevel = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
-    zoomLevel = Math.max(0.05, Math.min(zoomLevel, 40));
-
-    const mousePointTo = {
-      x: (pointer.x - stage.x()) / oldScale,
-      y: (pointer.y - stage.y()) / oldScale,
-    };
-    stage.scale({ x: zoomLevel, y: zoomLevel });
+  }
+});
+stage.on('mousemove', (e) => {
+  if (isPanning) {
     stage.position({
-      x: pointer.x - mousePointTo.x * zoomLevel,
-      y: pointer.y - mousePointTo.y * zoomLevel,
+      x: e.evt.clientX - panStart.x,
+      y: e.evt.clientY - panStart.y,
     });
     stage.batchDraw();
-    updateZoomDisplay();
-  });
+  }
+});
+window.addEventListener('mouseup', (e) => {
+  if (isPanning) {
+    isPanning = false;
+    stage.container().style.cursor = S.tool === 'draw' ? 'crosshair' : 'default';
+  }
+});
 
-  // ── Pan (middle mouse or V+drag) ──
-  stage.on('mousedown', (e) => {
-    if (e.evt.button === 1 || (e.evt.button === 0 && vKeyDown)) {
-      isPanning = true;
-      panStart = { x: e.evt.clientX - stage.x(), y: e.evt.clientY - stage.y() };
-      stage.container().style.cursor = 'grabbing';
-      e.evt.preventDefault();
-    }
-  });
-  stage.on('mousemove', (e) => {
-    if (isPanning) {
-      stage.position({
-        x: e.evt.clientX - panStart.x,
-        y: e.evt.clientY - panStart.y,
-      });
-      stage.batchDraw();
-    }
-  });
-  window.addEventListener('mouseup', (e) => {
-    if (isPanning) {
-      isPanning = false;
-      stage.container().style.cursor = S.tool === 'draw' ? 'crosshair' : 'default';
-    }
-  });
-
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'v' || e.key === 'V') vKeyDown = true;
-    if (e.key === 'w' || e.key === 'W') setTool('draw');
-    if (e.key === 'e' || e.key === 'E') setTool('erase');
-    if (e.key === 's' || e.key === 'S') setTool('select');
-    if (e.key === 'g' || e.key === 'G') toggleGridVisibility();
-    if (e.key === 'Escape') cancelDrawing();
-  });
-  document.addEventListener('keyup', (e) => {
-    if (e.key === 'v' || e.key === 'V') vKeyDown = false;
-  });
-} // end tool-mode Konva setup
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'v' || e.key === 'V') vKeyDown = true;
+  if (e.key === 'w' || e.key === 'W') setTool('draw');
+  if (e.key === 'e' || e.key === 'E') setTool('erase');
+  if (e.key === 's' || e.key === 'S') setTool('select');
+  if (e.key === 'g' || e.key === 'G') toggleGridVisibility();
+  if (e.key === 'Escape') cancelDrawing();
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'v' || e.key === 'V') vKeyDown = false;
+});
 
 function updateZoomDisplay() {
   document.getElementById('zoom-display').textContent = Math.round(zoomLevel * 100) + '%';
@@ -1121,6 +994,12 @@ function handleFileSelect(e) { handleFile(e.target.files[0]); }
 
 function handleFile(file) {
   if (!file) return;
+
+  if (!S.activeVenueId) {
+    toast('Create or select a venue first', 'error');
+    return;
+  }
+
   const reader = new FileReader();
   reader.onload = async (ev) => {
     const data = ev.target.result;
@@ -1131,15 +1010,29 @@ function handleFile(file) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await api('POST', fpUrl('/image'), formData, true);
-      const json = await res.json();
+
+      if (!S.activeFpId) {
+        // First floor plan for this venue — create it
+        formData.append('name', 'Floor 1');
+        formData.append('floor_number', '1');
+        const res = await api('POST', '/api/v1/venues/' + S.activeVenueId + '/floor-plans', formData, true);
+        const fp = await res.json();
+        S.activeFpId = fp.id;
+        localStorage.setItem('trakn_active_fp', fp.id);
+        // Update cache
+        const venue = S.allVenues.find(v => v.id === S.activeVenueId);
+        if (venue) { venue.floor_plans = venue.floor_plans || []; venue.floor_plans.push(fp); }
+      } else {
+        // Replace image on existing floor plan
+        await api('POST', '/api/v1/floor-plans/' + S.activeFpId + '/image', formData, true);
+      }
+
       toast('Floor plan uploaded to server', 'success');
     } catch (e) {
       toast('Floor plan saved locally (upload failed: ' + e.message + ')', 'info');
     }
   };
-  if (file.type === 'image/svg+xml') reader.readAsDataURL(file);
-  else reader.readAsDataURL(file);
+  reader.readAsDataURL(file);
 }
 
 function displayFloorPlan(dataUrl, name) {
@@ -1160,8 +1053,12 @@ function displayFloorPlan(dataUrl, name) {
 }
 
 async function loadFromServer() {
+  if (!S.activeFpId) {
+    toast('No venue/floor plan selected', 'error');
+    return;
+  }
   try {
-    const res = await api('GET', fpUrl('/image'));
+    const res = await api('GET', '/api/v1/floor-plans/' + S.activeFpId + '/image');
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     displayFloorPlan(url, 'floor-plan-from-server');
@@ -1553,7 +1450,7 @@ async function saveGridToServer() {
       x: parseFloat((p.x / S.scale).toFixed(3)),
       y: parseFloat((p.y / S.scale).toFixed(3)),
     }));
-    await apiJSON('POST', fpUrl('/grid'), {
+    await apiJSON('POST', '/api/v1/venue/grid-points', {
       scale_px_per_m: S.scale,
       grid_spacing_m: S.grid.spacing,
       points: apiPoints,
@@ -1692,6 +1589,7 @@ function renderHeatmap(ap) {
 // ── Live Sync ──
 function startLiveSync() {
   if (S.liveSyncInterval) return;
+  if (!S.activeFpId) return; // don't sync without a selected floor plan
   S.liveSyncInterval = setInterval(syncAPs, 3000);
   syncAPs();
 }
@@ -1702,7 +1600,7 @@ function stopLiveSync() {
 
 async function syncAPs() {
   try {
-    const data = await apiJSON('GET', fpUrl('/aps'));
+    const data = await apiJSON('GET', '/api/v1/venue/aps');
     const aps = data.access_points || [];
 
     const dot = document.getElementById('live-dot');
@@ -1765,7 +1663,7 @@ async function computeRadioMap() {
   document.getElementById('radio-status-text').textContent = 'Starting...';
 
   try {
-    const res = await apiJSON('POST', fpUrl('/radio-map/compute'));
+    const res = await apiJSON('POST', '/api/v1/venue/radio-map/compute');
     const taskId = res.task_id;
     S.radioMap.taskId = taskId;
     pollRadioMapStatus(taskId);
@@ -1778,7 +1676,7 @@ async function computeRadioMap() {
 async function pollRadioMapStatus(taskId) {
   const interval = setInterval(async () => {
     try {
-      const data = await apiJSON('GET', fpUrl(`/radio-map/status/${taskId}`));
+      const data = await apiJSON('GET', `/api/v1/venue/radio-map/status/${taskId}`);
       const progress = data.progress || 0;
       document.getElementById('radio-progress').style.width = progress + '%';
       document.getElementById('radio-status-text').textContent = data.status + ' ' + progress + '%';
@@ -1809,7 +1707,7 @@ async function pollRadioMapStatus(taskId) {
 
 async function loadRadioMap() {
   try {
-    const data = await apiJSON('GET', fpUrl('/radio-map'));
+    const data = await apiJSON('GET', '/api/v1/venue/radio-map');
     S.radioMap.data = data.radio_map || [];
 
     document.getElementById('rm-aps').textContent = S.aps.list.length;
@@ -1876,7 +1774,7 @@ function exportAPs() {
 
 async function exportRadioMap() {
   try {
-    const data = await apiJSON('GET', fpUrl('/radio-map'));
+    const data = await apiJSON('GET', '/api/v1/venue/radio-map');
     downloadJSON(data, 'trakn_radio_map.json');
     toast('Radio map exported', 'success');
   } catch (e) {
@@ -1916,9 +1814,9 @@ function renderChecklist() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Canvas click handler  (tool mode only)
+// Canvas click handler
 // ════════════════════════════════════════════════════════════
-if (CURRENT_FP_ID) stage.on('click', (e) => {
+stage.on('click', (e) => {
   if (isPanning) return;
   if (e.evt.button !== 0) return; // only left click
 
@@ -1999,7 +1897,7 @@ if (CURRENT_FP_ID) stage.on('click', (e) => {
 });
 
 // Right-click — remove last vertex
-if (CURRENT_FP_ID) stage.on('contextmenu', (e) => {
+stage.on('contextmenu', (e) => {
   e.evt.preventDefault();
   if (S.tool === 'draw' && S.drawing.active) {
     S.drawing.vertices.pop();
@@ -2012,7 +1910,7 @@ if (CURRENT_FP_ID) stage.on('contextmenu', (e) => {
 });
 
 // Mouse move — preview line
-if (CURRENT_FP_ID) stage.on('mousemove', (e) => {
+stage.on('mousemove', (e) => {
   if (S.tool !== 'draw' || !S.drawing.active || isPanning) return;
   const pos = stage.getPointerPosition();
   const canvasPos = stageToCanvas(pos);
@@ -2048,209 +1946,257 @@ function updateStatusBar() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Page init — tool mode vs. dashboard mode
+// Venue Management
 // ════════════════════════════════════════════════════════════
-if (CURRENT_FP_ID) {
-  // ── Show mapping tool, hide dashboard ─────────────────
-  document.getElementById('dashboard').style.display = 'none';
-  document.getElementById('tool').style.display = 'flex';
-  document.getElementById('tool-context-bar').style.display = 'flex';
 
-  // Load floor plan context for the header bar
-  (async () => {
-    try {
-      const fp = await apiJSON('GET', `/api/v1/floor-plans/${CURRENT_FP_ID}`);
-      const venue = await apiJSON('GET', `/api/v1/venues/${fp.venue_id}`);
-      document.getElementById('ctx-venue').textContent = venue.name;
-      document.getElementById('ctx-floor').textContent = fp.name + ' (F' + fp.floor_number + ')';
-      document.getElementById('ctx-fp-id').textContent = 'ID: ' + CURRENT_FP_ID.slice(0, 8) + '…';
-    } catch (_) {}
-  })();
-
-  // Init tool
-  goStep(1);
-  setTool('select');
-  updateZoomDisplay();
-  toast('TRAKN Mapping Tool ready. Loading floor plan…', 'info', 3000);
-
-  // Auto-load the floor plan image from server
-  (async () => {
-    try {
-      const res = await api('GET', fpUrl('/image'));
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      displayFloorPlan(url, 'floor-plan-from-server');
-    } catch (e) {
-      toast('No floor plan image on server yet — upload one in Step 1.', 'warn', 5000);
-    }
-  })();
-
-  (async () => {
-    try {
-      await api('GET', '/health');
-      document.getElementById('live-text').textContent = '● Backend OK';
-      document.getElementById('live-text').style.color = 'var(--green)';
-      document.getElementById('live-dot').className = 'active';
-    } catch (e) {
-      document.getElementById('live-text').textContent = '● Offline';
-      document.getElementById('offline-banner').style.display = 'block';
-    }
-  })();
-
-} else {
-  // Dashboard is visible by default (CSS display:flex)
-  initDashboard();
+function setVenueStatus(msg) {
+  document.getElementById('venue-status').textContent = msg;
 }
 
-// ════════════════════════════════════════════════════════════
-// Dashboard Logic
-// ════════════════════════════════════════════════════════════
-async function initDashboard() {
-  try {
-    await api('GET', '/health');
-  } catch (e) {
-    document.getElementById('venues-grid').innerHTML =
-      '<div class="empty-state"><div class="empty-icon">⚠️</div><p style="color:var(--red)">Backend offline — cannot load venues.</p></div>';
+function renderVenueSelector() {
+  const sel = document.getElementById('venue-select');
+  sel.innerHTML = '';
+  if (S.allVenues.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '— no venues —';
+    sel.appendChild(opt);
     return;
   }
-  await loadVenues();
-}
-
-async function loadVenues() {
-  try {
-    const data = await apiJSON('GET', '/api/v1/venues');
-    renderVenues(data.venues || []);
-  } catch (e) {
-    toast('Failed to load venues: ' + e.message, 'error');
-  }
-}
-
-function renderVenues(venues) {
-  const grid = document.getElementById('venues-grid');
-  if (!venues.length) {
-    grid.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">🏢</div>
-        <p>No venues yet. Create one to start mapping.</p>
-        <button class="dash-btn primary" onclick="showCreateVenueModal()">+ Create Venue</button>
-      </div>`;
-    return;
-  }
-  grid.innerHTML = '';
-  venues.forEach(venue => {
-    const card = document.createElement('div');
-    card.className = 'venue-card';
-    const floors = venue.floor_plans || [];
-    card.innerHTML = `
-      <div class="venue-card-header">
-        <div>
-          <div class="venue-name">${escHtml(venue.name)}</div>
-          <div class="venue-meta">${floors.length} floor plan${floors.length !== 1 ? 's' : ''}</div>
-        </div>
-        <div class="venue-actions">
-          <button class="dash-btn" onclick="showAddFloorModal('${venue.id}')">+ Floor</button>
-          <button class="dash-btn danger" onclick="deleteVenue('${venue.id}', '${escHtml(venue.name)}')">✕</button>
-        </div>
-      </div>
-      <div class="floor-list">
-        ${floors.length === 0
-          ? `<div style="padding:14px 16px;font-size:11px;color:var(--text-dim);">No floors yet — add a floor plan above.</div>`
-          : floors.map(fp => `
-            <div class="floor-item" onclick="openFloorPlan('${fp.id}')">
-              <div class="floor-num">F${fp.floor_number}</div>
-              <div class="floor-name">${escHtml(fp.name)}</div>
-              <div class="floor-badges">
-                ${fp.has_image ? '<span class="floor-badge has-data">img</span>' : ''}
-                ${fp.ap_count > 0 ? `<span class="floor-badge has-data">${fp.ap_count} APs</span>` : ''}
-              </div>
-              <button class="floor-open-btn">Open →</button>
-            </div>`).join('')}
-      </div>`;
-    grid.appendChild(card);
+  S.allVenues.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.name;
+    if (v.id === S.activeVenueId) opt.selected = true;
+    sel.appendChild(opt);
   });
 }
 
-function openFloorPlan(fpId) {
-  location.href = '/tool/?fp=' + fpId;
+async function onVenueSelectChange() {
+  const venueId = document.getElementById('venue-select').value;
+  if (!venueId || venueId === S.activeVenueId) return;
+  stopLiveSync();
+  await loadVenueData(venueId, null);
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+async function loadVenueData(venueId, preferredFpId) {
+  setVenueStatus('Loading…');
+  try {
+    const data = await apiJSON('GET', '/api/v1/venues/' + venueId);
+    S.activeVenueId = venueId;
+    localStorage.setItem('trakn_active_venue', venueId);
+    document.getElementById('venue-select').value = venueId;
+
+    const fps = data.floor_plans || [];
+    if (fps.length === 0) {
+      S.activeFpId = null;
+      clearCanvasForNewVenue();
+      setVenueStatus('No floor plan yet — upload one in Step 1.');
+      return;
+    }
+
+    const fp = (preferredFpId && fps.find(f => f.id === preferredFpId)) || fps[0];
+    await loadFloorPlanData(fp.id, fp);
+  } catch (e) {
+    setVenueStatus('Failed to load venue.');
+    toast('Failed to load venue: ' + e.message, 'error');
+  }
 }
 
+async function loadFloorPlanData(fpId, fpMeta) {
+  S.activeFpId = fpId;
+  localStorage.setItem('trakn_active_fp', fpId);
+  clearCanvasForNewVenue();
+
+  // Load floor plan image
+  try {
+    const res = await api('GET', '/api/v1/floor-plans/' + fpId + '/image');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    displayFloorPlan(url, fpMeta ? fpMeta.name : 'floor-plan');
+  } catch (e) {
+    setVenueStatus('No floor plan image — upload one in Step 1.');
+  }
+
+  // Load grid (returns scale too)
+  try {
+    const grid = await apiJSON('GET', '/api/v1/floor-plans/' + fpId + '/grid');
+    S.scale = grid.scale_px_per_m || S.scale;
+    S.grid.spacing = grid.grid_spacing_m || 0.5;
+    document.getElementById('scale-input').value = S.scale.toFixed(2);
+
+    S.grid.points = grid.points.map(p => ({ x: p.x * S.scale, y: p.y * S.scale }));
+    S.grid.generated = true;
+
+    gridLayer.destroyChildren();
+    const dotR = Math.max(1, 2 / zoomLevel);
+    S.grid.points.forEach(pt => {
+      gridLayer.add(new Konva.Circle({
+        x: pt.x, y: pt.y, radius: dotR,
+        fill: 'rgba(59,130,246,0.7)', name: 'grid-dot', listening: false,
+      }));
+    });
+    gridLayer.batchDraw();
+    document.getElementById('save-grid-btn').disabled = false;
+    updateGridStats();
+    setBadge(3, S.grid.points.length >= 100 ? 'ok' : 'warn', S.grid.points.length + '');
+    updateStatusBar();
+  } catch (e) {
+    // No grid saved yet — that's fine
+  }
+
+  // Load APs immediately
+  try {
+    const data = await apiJSON('GET', '/api/v1/venue/aps'); // X-Floor-Plan-Id header sent by api()
+    const aps = data.access_points || [];
+    apLayer.destroyChildren();
+    S.aps.list = aps;
+    S.knownBssids = new Set(aps.map(a => a.bssid));
+    aps.forEach(ap => addApToCanvas(ap, false));
+    renderApList();
+    updateStatusBar();
+    if (aps.length > 0) setBadge(4, aps.length >= 3 ? 'ok' : 'warn', aps.length + '');
+  } catch (e) {
+    // No APs yet
+  }
+
+  setVenueStatus('');
+}
+
+function clearCanvasForNewVenue() {
+  S.floorPlanLoaded = false;
+  S.floorPlanImageData = null;
+  S.polygons = [];
+  S.drawing = { active: false, vertices: [], previewLine: null, snapCircle: null, snapLabel: null };
+  S.grid = { points: [], spacing: 0.5, visible: true, generated: false };
+  S.aps = { list: [], selected: null };
+  S.radioMap = { taskId: null, status: null, data: null, computed: false };
+  S.knownBssids = new Set();
+
+  bgLayer.destroyChildren(); bgLayer.batchDraw();
+  heatmapLayer.destroyChildren(); heatmapLayer.batchDraw();
+  gridLayer.destroyChildren(); gridLayer.batchDraw();
+  polyLayer.destroyChildren(); polyLayer.batchDraw();
+  apLayer.destroyChildren(); apLayer.batchDraw();
+  drawingLayer.destroyChildren(); drawingLayer.batchDraw();
+
+  for (let i = 1; i <= 6; i++) {
+    const el = document.getElementById('badge-' + i);
+    el.className = 'step-badge'; el.textContent = '—';
+    document.getElementById('step-item-' + i).classList.remove('done');
+    document.getElementById('dot-' + i).classList.remove('done');
+  }
+
+  const dz = document.getElementById('drop-zone');
+  dz.innerHTML = '<div>↑ Drop PNG/SVG here</div><div style="font-size:10px; margin-top:4px; color:var(--text-dim)">or click to browse</div>';
+
+  renderPolygonList();
+  renderApList();
+  updateGridStats();
+  updateStatusBar();
+}
+
+// ── Modal ──
 function showCreateVenueModal() {
-  document.getElementById('cv-name').value = '';
-  document.getElementById('cv-desc').value = '';
-  document.getElementById('modal-create-venue').classList.add('open');
-  setTimeout(() => document.getElementById('cv-name').focus(), 50);
+  document.getElementById('venue-modal-overlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('venue-name-input').focus(), 50);
 }
 
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
+function hideCreateVenueModal() {
+  document.getElementById('venue-modal-overlay').style.display = 'none';
 }
 
 async function createVenue() {
-  const name = document.getElementById('cv-name').value.trim();
+  const name = document.getElementById('venue-name-input').value.trim();
   if (!name) { toast('Enter a venue name', 'error'); return; }
-  const desc = document.getElementById('cv-desc').value.trim();
+
   try {
-    await apiJSON('POST', '/api/v1/venues', { name, description: desc });
-    closeModal('modal-create-venue');
-    toast('Venue created', 'success');
-    await loadVenues();
+    const venue = await apiJSON('POST', '/api/v1/venues', { name, description: '' });
+    S.allVenues.push({ id: venue.id, name: venue.name, floor_plans: [] });
+    S.activeVenueId = venue.id;
+    S.activeFpId = null;
+    localStorage.setItem('trakn_active_venue', venue.id);
+    localStorage.removeItem('trakn_active_fp');
+    renderVenueSelector();
+    document.getElementById('venue-select').value = venue.id;
+    clearCanvasForNewVenue();
+    hideCreateVenueModal();
+    setVenueStatus('No floor plan yet — upload one in Step 1.');
+    toast('Venue "' + venue.name + '" created. Upload a floor plan in Step 1.', 'success');
   } catch (e) {
     toast('Failed to create venue: ' + e.message, 'error');
   }
 }
 
-function showAddFloorModal(venueId) {
-  document.getElementById('af-venue-id').value = venueId;
-  document.getElementById('af-name').value = '';
-  document.getElementById('af-num').value = '1';
-  document.getElementById('af-file').value = '';
-  document.getElementById('modal-add-floor').classList.add('open');
-  setTimeout(() => document.getElementById('af-name').focus(), 50);
-}
+async function deleteCurrentVenue() {
+  if (!S.activeVenueId) { toast('No venue selected', 'error'); return; }
+  const venue = S.allVenues.find(v => v.id === S.activeVenueId);
+  if (!venue) return;
 
-async function addFloorPlan() {
-  const venueId = document.getElementById('af-venue-id').value;
-  const name    = document.getElementById('af-name').value.trim() || 'Floor 1';
-  const num     = parseInt(document.getElementById('af-num').value) || 1;
-  const file    = document.getElementById('af-file').files[0];
-  if (!file) { toast('Select an image file', 'error'); return; }
-
-  const form = new FormData();
-  form.append('name', name);
-  form.append('floor_number', num);
-  form.append('file', file);
+  if (!confirm('Delete venue "' + venue.name + '"?\n\nThis will permanently delete all floor plans, APs, and grid data for this venue.')) return;
 
   try {
-    const fp = await apiJSON('POST', `/api/v1/venues/${venueId}/floor-plans`, form, true);
-    closeModal('modal-add-floor');
-    toast('Floor plan created — opening tool…', 'success');
-    setTimeout(() => openFloorPlan(fp.id), 800);
+    await apiJSON('DELETE', '/api/v1/venues/' + S.activeVenueId);
+    S.allVenues = S.allVenues.filter(v => v.id !== S.activeVenueId);
+    S.activeVenueId = null;
+    S.activeFpId = null;
+    localStorage.removeItem('trakn_active_venue');
+    localStorage.removeItem('trakn_active_fp');
+    stopLiveSync();
+    renderVenueSelector();
+    clearCanvasForNewVenue();
+
+    if (S.allVenues.length > 0) {
+      await loadVenueData(S.allVenues[0].id, null);
+    } else {
+      setVenueStatus('No venues — click + to create one.');
+    }
+    toast('Venue deleted', 'success');
   } catch (e) {
-    toast('Failed: ' + e.message, 'error');
+    toast('Failed to delete venue: ' + e.message, 'error');
   }
 }
 
-async function deleteVenue(venueId, name) {
-  if (!confirm(`Delete venue "${name}" and ALL its floor plans? This cannot be undone.`)) return;
+async function initFromServer() {
   try {
-    await api('DELETE', `/api/v1/venues/${venueId}`);
-    toast('Venue deleted', 'info');
-    await loadVenues();
+    await api('GET', '/health');
+    document.getElementById('live-text').textContent = '● Backend OK';
+    document.getElementById('live-text').style.color = 'var(--green)';
+    document.getElementById('live-dot').className = 'active';
   } catch (e) {
-    toast('Delete failed: ' + e.message, 'error');
+    document.getElementById('live-text').textContent = '● Offline';
+    document.getElementById('offline-banner').style.display = 'block';
+    setVenueStatus('Backend offline.');
+    return;
+  }
+
+  try {
+    const data = await apiJSON('GET', '/api/v1/venues');
+    S.allVenues = data.venues || [];
+    renderVenueSelector();
+
+    const savedFpId = localStorage.getItem('trakn_active_fp');
+    const savedVenueId = localStorage.getItem('trakn_active_venue');
+
+    if (S.allVenues.length === 0) {
+      setVenueStatus('No venues — click + to create one.');
+      return;
+    }
+
+    const venue = (savedVenueId && S.allVenues.find(v => v.id === savedVenueId)) || S.allVenues[0];
+    await loadVenueData(venue.id, savedFpId);
+  } catch (e) {
+    setVenueStatus('Could not load venues.');
+    toast('Could not load venues: ' + e.message, 'error');
   }
 }
 
 // ════════════════════════════════════════════════════════════
-// Patch API calls in the mapping tool to be floor-plan scoped
+// Init
 // ════════════════════════════════════════════════════════════
-// These are only active when CURRENT_FP_ID is set (tool mode).
-// We override the specific paths used in the tool's functions.
+goStep(1);
+setTool('select');
+updateZoomDisplay();
+initFromServer();
 </script>
-</div><!-- #tool -->
 </body>
 </html>

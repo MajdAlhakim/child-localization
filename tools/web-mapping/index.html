@@ -362,6 +362,37 @@
   .info-text { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
 
   .sep { height: 1px; background: var(--border); margin: 6px 0; }
+
+  /* ── Venue selector ── */
+  .venue-row { display: flex; gap: 4px; align-items: center; }
+  .venue-select {
+    flex: 1; background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 6px; border-radius: 3px; font-size: 11px; outline: none;
+  }
+  .venue-select:focus { border-color: var(--accent); }
+  .icon-btn {
+    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+    background: var(--bg4); border: 1px solid var(--border); border-radius: 3px;
+    cursor: pointer; font-size: 13px; color: var(--text-muted); flex-shrink: 0;
+    transition: all 0.1s;
+  }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .icon-btn.danger:hover { border-color: var(--red); color: var(--red); }
+  .venue-status { font-size: 10px; color: var(--text-dim); margin-top: 4px; min-height: 14px; }
+
+  /* ── Modal ── */
+  #venue-modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65); z-index: 2000;
+    align-items: center; justify-content: center;
+  }
+  .modal-box {
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 20px; width: 300px;
+  }
+  .modal-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text); }
+  .modal-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 10px; }
+  .modal-actions .primary-btn, .modal-actions .secondary-btn { width: auto; padding: 5px 14px; }
 </style>
 </head>
 <body>
@@ -404,6 +435,19 @@
 
   <!-- Left Sidebar -->
   <div id="sidebar">
+    <!-- Venue Selector -->
+    <div class="sidebar-section" id="venue-section" style="padding:10px 12px">
+      <div class="tool-label">Venue</div>
+      <div class="venue-row">
+        <select id="venue-select" class="venue-select" onchange="onVenueSelectChange()">
+          <option value="">— no venues —</option>
+        </select>
+        <div class="icon-btn" onclick="showCreateVenueModal()" title="New venue">+</div>
+        <div class="icon-btn danger" onclick="deleteCurrentVenue()" title="Delete venue">✕</div>
+      </div>
+      <div class="venue-status" id="venue-status">Loading venues…</div>
+    </div>
+
     <div class="step-item active" id="step-item-1" onclick="goStep(1)">
       <div class="step-num">1</div>
       <div class="step-info">
@@ -643,6 +687,20 @@
   </div>
 </div>
 
+<!-- Venue Create Modal -->
+<div id="venue-modal-overlay">
+  <div class="modal-box">
+    <div class="modal-title">New Venue</div>
+    <input id="venue-name-input" class="panel-input" placeholder="Venue name (e.g. Building A, Floor 2)"
+      style="width:100%; margin-bottom:4px"
+      onkeydown="if(event.key==='Enter') createVenue(); if(event.key==='Escape') hideCreateVenueModal()">
+    <div class="modal-actions">
+      <button class="secondary-btn" onclick="hideCreateVenueModal()">Cancel</button>
+      <button class="primary-btn" onclick="createVenue()">Create</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast container -->
 <div id="toast-container"></div>
 
@@ -685,6 +743,11 @@ const S = {
   tool: 'select',       // 'select' | 'draw' | 'erase'
 
   inspectMode: false,
+
+  // Venue management
+  activeVenueId: null,  // string UUID
+  activeFpId: null,     // string UUID — current floor plan
+  allVenues: [],        // cached list from server
 };
 
 // ════════════════════════════════════════════════════════════
@@ -692,6 +755,7 @@ const S = {
 // ════════════════════════════════════════════════════════════
 async function api(method, path, body, isFormData) {
   const headers = { 'X-API-Key': API_KEY };
+  if (S.activeFpId) headers['X-Floor-Plan-Id'] = S.activeFpId;
   if (!isFormData && body) headers['Content-Type'] = 'application/json';
 
   let res;
@@ -930,6 +994,12 @@ function handleFileSelect(e) { handleFile(e.target.files[0]); }
 
 function handleFile(file) {
   if (!file) return;
+
+  if (!S.activeVenueId) {
+    toast('Create or select a venue first', 'error');
+    return;
+  }
+
   const reader = new FileReader();
   reader.onload = async (ev) => {
     const data = ev.target.result;
@@ -940,15 +1010,29 @@ function handleFile(file) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await api('POST', '/api/v1/venue/floor-plan', formData, true);
-      const json = await res.json();
+
+      if (!S.activeFpId) {
+        // First floor plan for this venue — create it
+        formData.append('name', 'Floor 1');
+        formData.append('floor_number', '1');
+        const res = await api('POST', '/api/v1/venues/' + S.activeVenueId + '/floor-plans', formData, true);
+        const fp = await res.json();
+        S.activeFpId = fp.id;
+        localStorage.setItem('trakn_active_fp', fp.id);
+        // Update cache
+        const venue = S.allVenues.find(v => v.id === S.activeVenueId);
+        if (venue) { venue.floor_plans = venue.floor_plans || []; venue.floor_plans.push(fp); }
+      } else {
+        // Replace image on existing floor plan
+        await api('POST', '/api/v1/floor-plans/' + S.activeFpId + '/image', formData, true);
+      }
+
       toast('Floor plan uploaded to server', 'success');
     } catch (e) {
       toast('Floor plan saved locally (upload failed: ' + e.message + ')', 'info');
     }
   };
-  if (file.type === 'image/svg+xml') reader.readAsDataURL(file);
-  else reader.readAsDataURL(file);
+  reader.readAsDataURL(file);
 }
 
 function displayFloorPlan(dataUrl, name) {
@@ -969,8 +1053,12 @@ function displayFloorPlan(dataUrl, name) {
 }
 
 async function loadFromServer() {
+  if (!S.activeFpId) {
+    toast('No venue/floor plan selected', 'error');
+    return;
+  }
   try {
-    const res = await api('GET', '/api/v1/venue/floor-plan');
+    const res = await api('GET', '/api/v1/floor-plans/' + S.activeFpId + '/image');
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     displayFloorPlan(url, 'floor-plan-from-server');
@@ -1501,6 +1589,7 @@ function renderHeatmap(ap) {
 // ── Live Sync ──
 function startLiveSync() {
   if (S.liveSyncInterval) return;
+  if (!S.activeFpId) return; // don't sync without a selected floor plan
   S.liveSyncInterval = setInterval(syncAPs, 3000);
   syncAPs();
 }
@@ -1857,15 +1946,217 @@ function updateStatusBar() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Init
+// Venue Management
 // ════════════════════════════════════════════════════════════
-goStep(1);
-setTool('select');
-updateZoomDisplay();
-toast('TRAKN Web Mapping Tool ready. Start with Step 1 to upload the floor plan.', 'info', 5000);
 
-// Check backend health
-(async () => {
+function setVenueStatus(msg) {
+  document.getElementById('venue-status').textContent = msg;
+}
+
+function renderVenueSelector() {
+  const sel = document.getElementById('venue-select');
+  sel.innerHTML = '';
+  if (S.allVenues.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = '— no venues —';
+    sel.appendChild(opt);
+    return;
+  }
+  S.allVenues.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = v.name;
+    if (v.id === S.activeVenueId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+async function onVenueSelectChange() {
+  const venueId = document.getElementById('venue-select').value;
+  if (!venueId || venueId === S.activeVenueId) return;
+  stopLiveSync();
+  await loadVenueData(venueId, null);
+}
+
+async function loadVenueData(venueId, preferredFpId) {
+  setVenueStatus('Loading…');
+  try {
+    const data = await apiJSON('GET', '/api/v1/venues/' + venueId);
+    S.activeVenueId = venueId;
+    localStorage.setItem('trakn_active_venue', venueId);
+    document.getElementById('venue-select').value = venueId;
+
+    const fps = data.floor_plans || [];
+    if (fps.length === 0) {
+      S.activeFpId = null;
+      clearCanvasForNewVenue();
+      setVenueStatus('No floor plan yet — upload one in Step 1.');
+      return;
+    }
+
+    const fp = (preferredFpId && fps.find(f => f.id === preferredFpId)) || fps[0];
+    await loadFloorPlanData(fp.id, fp);
+  } catch (e) {
+    setVenueStatus('Failed to load venue.');
+    toast('Failed to load venue: ' + e.message, 'error');
+  }
+}
+
+async function loadFloorPlanData(fpId, fpMeta) {
+  S.activeFpId = fpId;
+  localStorage.setItem('trakn_active_fp', fpId);
+  clearCanvasForNewVenue();
+
+  // Load floor plan image
+  try {
+    const res = await api('GET', '/api/v1/floor-plans/' + fpId + '/image');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    displayFloorPlan(url, fpMeta ? fpMeta.name : 'floor-plan');
+  } catch (e) {
+    setVenueStatus('No floor plan image — upload one in Step 1.');
+  }
+
+  // Load grid (returns scale too)
+  try {
+    const grid = await apiJSON('GET', '/api/v1/floor-plans/' + fpId + '/grid');
+    S.scale = grid.scale_px_per_m || S.scale;
+    S.grid.spacing = grid.grid_spacing_m || 0.5;
+    document.getElementById('scale-input').value = S.scale.toFixed(2);
+
+    S.grid.points = grid.points.map(p => ({ x: p.x * S.scale, y: p.y * S.scale }));
+    S.grid.generated = true;
+
+    gridLayer.destroyChildren();
+    const dotR = Math.max(1, 2 / zoomLevel);
+    S.grid.points.forEach(pt => {
+      gridLayer.add(new Konva.Circle({
+        x: pt.x, y: pt.y, radius: dotR,
+        fill: 'rgba(59,130,246,0.7)', name: 'grid-dot', listening: false,
+      }));
+    });
+    gridLayer.batchDraw();
+    document.getElementById('save-grid-btn').disabled = false;
+    updateGridStats();
+    setBadge(3, S.grid.points.length >= 100 ? 'ok' : 'warn', S.grid.points.length + '');
+    updateStatusBar();
+  } catch (e) {
+    // No grid saved yet — that's fine
+  }
+
+  // Load APs immediately
+  try {
+    const data = await apiJSON('GET', '/api/v1/venue/aps'); // X-Floor-Plan-Id header sent by api()
+    const aps = data.access_points || [];
+    apLayer.destroyChildren();
+    S.aps.list = aps;
+    S.knownBssids = new Set(aps.map(a => a.bssid));
+    aps.forEach(ap => addApToCanvas(ap, false));
+    renderApList();
+    updateStatusBar();
+    if (aps.length > 0) setBadge(4, aps.length >= 3 ? 'ok' : 'warn', aps.length + '');
+  } catch (e) {
+    // No APs yet
+  }
+
+  setVenueStatus('');
+}
+
+function clearCanvasForNewVenue() {
+  S.floorPlanLoaded = false;
+  S.floorPlanImageData = null;
+  S.polygons = [];
+  S.drawing = { active: false, vertices: [], previewLine: null, snapCircle: null, snapLabel: null };
+  S.grid = { points: [], spacing: 0.5, visible: true, generated: false };
+  S.aps = { list: [], selected: null };
+  S.radioMap = { taskId: null, status: null, data: null, computed: false };
+  S.knownBssids = new Set();
+
+  bgLayer.destroyChildren(); bgLayer.batchDraw();
+  heatmapLayer.destroyChildren(); heatmapLayer.batchDraw();
+  gridLayer.destroyChildren(); gridLayer.batchDraw();
+  polyLayer.destroyChildren(); polyLayer.batchDraw();
+  apLayer.destroyChildren(); apLayer.batchDraw();
+  drawingLayer.destroyChildren(); drawingLayer.batchDraw();
+
+  for (let i = 1; i <= 6; i++) {
+    const el = document.getElementById('badge-' + i);
+    el.className = 'step-badge'; el.textContent = '—';
+    document.getElementById('step-item-' + i).classList.remove('done');
+    document.getElementById('dot-' + i).classList.remove('done');
+  }
+
+  const dz = document.getElementById('drop-zone');
+  dz.innerHTML = '<div>↑ Drop PNG/SVG here</div><div style="font-size:10px; margin-top:4px; color:var(--text-dim)">or click to browse</div>';
+
+  renderPolygonList();
+  renderApList();
+  updateGridStats();
+  updateStatusBar();
+}
+
+// ── Modal ──
+function showCreateVenueModal() {
+  document.getElementById('venue-modal-overlay').style.display = 'flex';
+  setTimeout(() => document.getElementById('venue-name-input').focus(), 50);
+}
+
+function hideCreateVenueModal() {
+  document.getElementById('venue-modal-overlay').style.display = 'none';
+}
+
+async function createVenue() {
+  const name = document.getElementById('venue-name-input').value.trim();
+  if (!name) { toast('Enter a venue name', 'error'); return; }
+
+  try {
+    const venue = await apiJSON('POST', '/api/v1/venues', { name, description: '' });
+    S.allVenues.push({ id: venue.id, name: venue.name, floor_plans: [] });
+    S.activeVenueId = venue.id;
+    S.activeFpId = null;
+    localStorage.setItem('trakn_active_venue', venue.id);
+    localStorage.removeItem('trakn_active_fp');
+    renderVenueSelector();
+    document.getElementById('venue-select').value = venue.id;
+    clearCanvasForNewVenue();
+    hideCreateVenueModal();
+    setVenueStatus('No floor plan yet — upload one in Step 1.');
+    toast('Venue "' + venue.name + '" created. Upload a floor plan in Step 1.', 'success');
+  } catch (e) {
+    toast('Failed to create venue: ' + e.message, 'error');
+  }
+}
+
+async function deleteCurrentVenue() {
+  if (!S.activeVenueId) { toast('No venue selected', 'error'); return; }
+  const venue = S.allVenues.find(v => v.id === S.activeVenueId);
+  if (!venue) return;
+
+  if (!confirm('Delete venue "' + venue.name + '"?\n\nThis will permanently delete all floor plans, APs, and grid data for this venue.')) return;
+
+  try {
+    await apiJSON('DELETE', '/api/v1/venues/' + S.activeVenueId);
+    S.allVenues = S.allVenues.filter(v => v.id !== S.activeVenueId);
+    S.activeVenueId = null;
+    S.activeFpId = null;
+    localStorage.removeItem('trakn_active_venue');
+    localStorage.removeItem('trakn_active_fp');
+    stopLiveSync();
+    renderVenueSelector();
+    clearCanvasForNewVenue();
+
+    if (S.allVenues.length > 0) {
+      await loadVenueData(S.allVenues[0].id, null);
+    } else {
+      setVenueStatus('No venues — click + to create one.');
+    }
+    toast('Venue deleted', 'success');
+  } catch (e) {
+    toast('Failed to delete venue: ' + e.message, 'error');
+  }
+}
+
+async function initFromServer() {
   try {
     await api('GET', '/health');
     document.getElementById('live-text').textContent = '● Backend OK';
@@ -1874,8 +2165,38 @@ toast('TRAKN Web Mapping Tool ready. Start with Step 1 to upload the floor plan.
   } catch (e) {
     document.getElementById('live-text').textContent = '● Offline';
     document.getElementById('offline-banner').style.display = 'block';
+    setVenueStatus('Backend offline.');
+    return;
   }
-})();
+
+  try {
+    const data = await apiJSON('GET', '/api/v1/venues');
+    S.allVenues = data.venues || [];
+    renderVenueSelector();
+
+    const savedFpId = localStorage.getItem('trakn_active_fp');
+    const savedVenueId = localStorage.getItem('trakn_active_venue');
+
+    if (S.allVenues.length === 0) {
+      setVenueStatus('No venues — click + to create one.');
+      return;
+    }
+
+    const venue = (savedVenueId && S.allVenues.find(v => v.id === savedVenueId)) || S.allVenues[0];
+    await loadVenueData(venue.id, savedFpId);
+  } catch (e) {
+    setVenueStatus('Could not load venues.');
+    toast('Could not load venues: ' + e.message, 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// Init
+// ════════════════════════════════════════════════════════════
+goStep(1);
+setTool('select');
+updateZoomDisplay();
+initFromServer();
 </script>
 </body>
 </html>
