@@ -15,12 +15,15 @@ class PDREngine:
     GYRO_DEAD_ZONE: float = 0.02        # rad/s — below this, treat as zero
 
     # ── Step detection ────────────────────────────────────────────────────────
-    MIN_STEP_DT_MS: float = 350.0
-    STD_FACTOR: float = 1.5             # was 2.0 — too strict for pocket mount
+    # INVARIANT: MIN_STEP_DT_MS must be > STEP_BUFFER_MS so the old step peak
+    # expires from the buffer before the cooldown ends, preventing the lingering
+    # peak from triggering a false detection immediately after the cooldown.
+    MIN_STEP_DT_MS: float = 500.0       # was 350 — must exceed STEP_BUFFER_MS
+    STD_FACTOR: float = 2.0             # was 1.5 — appropriate for filtered buffer data
     SWING_FACTOR: float = 0.9
-    MIN_STD: float = 0.5                # was 1.2 — rejected gentle walking
-    MIN_MEAN_DELTA: float = 0.1         # was 0.4 — walking mean ≈ 9.8, killed detections
-    STEP_BUFFER_MS: float = 500.0
+    MIN_STD: float = 0.5
+    MIN_MEAN_DELTA: float = 0.1
+    STEP_BUFFER_MS: float = 400.0       # was 500 — must be < MIN_STEP_DT_MS
 
     # ── Weinberg stride ───────────────────────────────────────────────────────
     K_WEIN: float = 0.47
@@ -70,20 +73,23 @@ class PDREngine:
         gz_corrected = gz - self.bias_gz
         self.gz_filt = self.gz_filt + alpha * (gz_corrected - self.gz_filt)
 
-        # Step 4 — gyro bias calibration
+        # Step 4 — gyro bias calibration (collect samples; do NOT return early
+        # so the step buffer keeps filling and steps can be counted immediately)
         if not self.bias_calibrated:
             self.bias_samples.append(gz)
             if len(self.bias_samples) >= self.BIAS_WINDOW:
                 self.bias_gz = sum(self.bias_samples) / len(self.bias_samples)
                 self.bias_calibrated = True
-            return self._state()
+            # Continue — heading updates with bias_gz=0 until calibration
+            # completes (slightly wrong heading for first ~2 s, acceptable)
 
         # Step 5 — heading integration with dead zone
         gz_to_int = self.gz_filt if abs(self.gz_filt) > self.GYRO_DEAD_ZONE else 0.0
         self.heading += gz_to_int * dt
 
-        # Step 6 — rolling step buffer
-        self.step_buffer.append(a_mag)
+        # Step 6 — rolling step buffer (use EMA-filtered magnitude, not raw,
+        # to eliminate high-frequency noise spikes that cause false detections)
+        self.step_buffer.append(self.a_mag_filt)
         self.step_buffer_ts.append(ts_ms)
         while (self.step_buffer_ts and
                ts_ms - self.step_buffer_ts[0] > self.STEP_BUFFER_MS):

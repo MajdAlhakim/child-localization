@@ -12,8 +12,13 @@ Packet format:
     "wifi": [{"bssid":"..", "ssid":"..", "rssi":-46, "ch":6}, ...]
 }
 
-Milestone 1: validate API key, parse, log, return 200.
-Milestone 2: run PDR engine on each IMU sample, return position in response.
+Fusion pipeline:
+  1. Run PDR on each IMU sample (continuous, 5 Hz).
+  2. When Wi-Fi scan arrives (~every 10 s from Beetle scanner):
+       a. Load APs from DB (cached 60 s).
+       b. Run RSSI localizer (Kalman smooth + log-distance + WRLS multilateration).
+       c. If ≥2 RSSI anchors: anchor PDR position to RSSI (prevents drift accumulation).
+  3. Broadcast fused position via WebSocket.
 """
 
 import logging
@@ -21,12 +26,17 @@ import os
 import time
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..db import get_db
 from ..fusion.device_state import DeviceState
+from ..fusion.rssi_localizer import localize as rssi_localize
 from ..fusion.tag_registry import registry
 from ..core.broadcaster import broadcaster
+from ..models import AccessPoint as APModel
 
 logger = logging.getLogger("trakn.gateway")
 logging.basicConfig(
@@ -38,11 +48,19 @@ router = APIRouter()
 
 # ── Module-level device state registry ───────────────────────────────────────
 # One DeviceState (with its own PDREngine) per MAC address.
-# Persists for the lifetime of the server process — no DB interaction.
 device_states: dict[str, DeviceState] = {}
 
+# ── AP cache — avoids DB hit on every packet ──────────────────────────────────
+# Refreshed at most once per AP_CACHE_TTL seconds.
+_ap_cache: list[dict] = []
+_ap_cache_ts: float   = 0.0
+_AP_CACHE_TTL: float  = 60.0   # seconds
 
-# ── Pydantic models  ────────────────────────────────────────────────
+# ── Minimum RSSI anchors needed before we snap PDR to RSSI ───────────────────
+_MIN_RSSI_ANCHORS: int = 2
+
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
 
 class ImuSample(BaseModel):
     ts: int            # device milliseconds
@@ -68,14 +86,39 @@ class GatewayPacket(BaseModel):
     wifi: list[WifiAP]   = Field(default_factory=list)
 
 
+# ── AP cache helper ───────────────────────────────────────────────────────────
+
+def _ap_to_dict(ap: APModel) -> dict:
+    return {
+        "bssid":        ap.bssid,
+        "ssid":         ap.ssid,
+        "rssi_ref":     ap.rssi_ref,
+        "path_loss_n":  ap.path_loss_n,
+        "x":            ap.x,
+        "y":            ap.y,
+    }
+
+async def _refresh_ap_cache_if_stale(db: AsyncSession) -> None:
+    """Reload all APs from DB if the cache is empty or older than AP_CACHE_TTL."""
+    global _ap_cache, _ap_cache_ts
+    if _ap_cache and (time.time() - _ap_cache_ts) < _AP_CACHE_TTL:
+        return
+    result = await db.execute(select(APModel))
+    aps = result.scalars().all()
+    _ap_cache = [_ap_to_dict(a) for a in aps]
+    _ap_cache_ts = time.time()
+    logger.info("AP cache refreshed — %d APs loaded", len(_ap_cache))
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @router.post("/api/v1/gateway/packet", status_code=status.HTTP_200_OK)
 async def receive_packet(
     packet: GatewayPacket,
     x_api_key: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Receive a packet from the ESP32-C5 tag, run PDR, return 200 + position."""
+    """Receive a packet from the ESP32-C5 tag, run PDR + RSSI fusion, return 200."""
 
     # ── Auth ──────────────────────────────────────────────────────────────────
     expected_key = os.environ.get("GATEWAY_API_KEY", "")
@@ -92,30 +135,45 @@ async def receive_packet(
     # ── Log packet metadata ───────────────────────────────────────────────────
     logger.info(
         "PACKET  mac=%s  device_ts=%d ms  imu_samples=%d  wifi_aps=%d",
-        mac,
-        packet.ts,
-        len(imu),
-        len(wifi),
+        mac, packet.ts, len(imu), len(wifi),
     )
-
-    # ── Log each WiFi AP ──────────────────────────────────────────────────────
     for ap in wifi:
         logger.info(
             "  WIFI  bssid=%s  ssid=%-20s  rssi=%4d dBm  ch=%d",
-            ap.bssid,
-            ap.ssid,
-            ap.rssi,
-            ap.ch,
+            ap.bssid, ap.ssid, ap.rssi, ap.ch,
         )
 
     # ── Register MAC → tag_id and get/create device state ────────────────────
-    tag_id = registry.register(mac)   # no-op if already known
+    tag_id = registry.register(mac)
     registry.touch(mac)
     if mac not in device_states:
         device_states[mac] = DeviceState(mac=mac)
         logger.info("  NEW device  mac=%s  tag_id=%s", mac, tag_id)
     state = device_states[mac]
     state.last_seen_ts = time.time()
+
+    # ── RSSI localization (runs when Wi-Fi scan is present) ───────────────────
+    rssi_result: dict | None = None
+    if wifi:
+        await _refresh_ap_cache_if_stale(db)
+        if _ap_cache:
+            scan = [{"bssid": ap.bssid, "rssi": ap.rssi} for ap in wifi]
+            rssi_result = rssi_localize(scan, _ap_cache, state.kalman_states)
+            if rssi_result:
+                logger.info(
+                    "  RSSI: x=%.2f y=%.2f anchors=%d err=%.1f dB",
+                    rssi_result["x"], rssi_result["y"],
+                    rssi_result["anchor_count"], rssi_result["avg_rssi_error"],
+                )
+
+    # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
+    # This corrects PDR drift every ~10 s (Beetle scan interval).
+    if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
+        state.pdr.x = rssi_result["x"]
+        state.pdr.y = rssi_result["y"]
+        logger.info(
+            "  PDR anchored to RSSI: (%.2f, %.2f)", rssi_result["x"], rssi_result["y"]
+        )
 
     # ── Run PDR on each IMU sample — broadcast immediately once calibrated ────
     pdr_result = None
@@ -136,26 +194,33 @@ async def receive_packet(
             gy    = sample.gy,
             gz    = sample.gz,
         )
-        # Broadcast per-sample once gyro bias is calibrated
         if pdr_result["bias_calibrated"]:
+            # Determine source and confidence for this broadcast
+            if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
+                source     = "rssi_anchored"
+                confidence = min(1.0, rssi_result["anchor_count"] / 5.0)
+            else:
+                source     = "pdr_only"
+                confidence = 0.0
+
             msg = dict(pdr_result)
-            msg["source"]     = "pdr_only"
-            msg["mode"]       = "imu_only"
-            msg["confidence"] = 0.0
-            msg["tag_id"]     = tag_id
+            msg["source"]        = source
+            msg["mode"]          = "fused" if source == "rssi_anchored" else "imu_only"
+            msg["confidence"]    = confidence
+            msg["tag_id"]        = tag_id
+            msg["rssi_anchors"]  = rssi_result["anchor_count"]   if rssi_result else None
+            msg["rssi_error"]    = rssi_result["avg_rssi_error"] if rssi_result else None
             await broadcaster.broadcast(tag_id, msg)
 
     # ── Log PDR output ────────────────────────────────────────────────────────
     if pdr_result:
         logger.info(
             "  PDR: x=%.2f y=%.2f steps=%d cal=%s",
-            pdr_result["x"],
-            pdr_result["y"],
-            pdr_result["step_count"],
-            pdr_result["bias_calibrated"],
+            pdr_result["x"], pdr_result["y"],
+            pdr_result["step_count"], pdr_result["bias_calibrated"],
         )
 
-    # ── Response ──────────────────────────────────────────────────
+    # ── Response ──────────────────────────────────────────────────────────────
     return {
         "status":      "ok",
         "mac":         mac,
@@ -166,6 +231,7 @@ async def receive_packet(
             "heading_deg": 0.0, "step_count": 0,
             "bias_calibrated": False,
         },
+        "rssi": rssi_result,
     }
 
 

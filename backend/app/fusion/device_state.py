@@ -18,3 +18,7 @@ class DeviceState:
     # Each entry: {"seq": int, "ts": int, "ax": float, ...}
     imu_buffer: deque = field(default_factory=lambda: deque(maxlen=2000))
     imu_seq: int = 0              # monotonically increasing sample counter
+
+    # Per-BSSID Kalman filter states for RSSI smoothing.
+    # {bssid_lower → KalmanState} — populated by rssi_localizer.localize()
+    kalman_states: dict = field(default_factory=dict)

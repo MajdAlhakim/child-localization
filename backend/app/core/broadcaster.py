@@ -47,6 +47,9 @@ class PositionBroadcaster:
             "source":          position.get("source", "pdr_only"),
             "mode":            position.get("mode", "imu_only"),
             "bias_calibrated": position.get("bias_calibrated", False),
+            # RSSI localization info — None when no scan in this packet
+            "rssi_anchors":    position.get("rssi_anchors"),
+            "rssi_error":      position.get("rssi_error"),
             "ts":              datetime.now(timezone.utc).isoformat(),
         })
 
