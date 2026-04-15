@@ -9,6 +9,7 @@ from backend.app.api.gateway import router as gateway_router
 from backend.app.api.venue import router as venue_router
 from backend.app.api.venues import router as venues_router
 from backend.app.api.tags import router as tags_router
+from backend.app.api.websocket import router as websocket_router
 
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ app.include_router(gateway_router)
 app.include_router(venue_router)   # legacy single-floor endpoints
 app.include_router(venues_router)  # new multi-floor endpoints
 app.include_router(tags_router)
+app.include_router(websocket_router)
 
 
 @app.get("/health")
