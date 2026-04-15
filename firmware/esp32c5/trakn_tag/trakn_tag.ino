@@ -32,8 +32,8 @@
 
 // ── Network config
 // ────────────────────────────────────────────────────────────
-#define WIFI_SSID "Alhakim"
-#define WIFI_PASS "sham@2014" // QU: SSID="QU-User", PASS=""
+#define WIFI_SSID "QU User"   // actual SSID — verify with scan (may be "QU User" with space)
+#define WIFI_PASS ""          
 #define SERVER_URL "https://35.238.189.188/api/v1/gateway/packet"
 #define DEVICE_MAC "24:42:E3:15:E5:72"
 #define API_KEY                                                                \
@@ -279,13 +279,27 @@ static void wifi_task(void *arg) {
   while (1) {
     if (WiFi.status() != WL_CONNECTED) {
       wifi_connected = false;
-      Serial.println("[WIFI] reconnecting...");
-      WiFi.reconnect();
-      vTaskDelay(pdMS_TO_TICKS(3000));
+      Serial.println("[WIFI] disconnected — restarting connection...");
+      WiFi.disconnect(true);
+      vTaskDelay(pdMS_TO_TICKS(500));
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+      // Wait up to 15s for connection
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts < 150) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        attempts++;
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        wifi_connected = true;
+        Serial.print("[WIFI] reconnected, IP: ");
+        Serial.println(WiFi.localIP());
+      } else {
+        Serial.println("[WIFI] reconnect failed — will retry");
+      }
     } else {
       wifi_connected = true;
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(5000));
   }
 }
 
@@ -375,10 +389,8 @@ static void post_task(void *arg) {
     // POST
     HTTPClient http;
     http.begin(client, SERVER_URL);
-    http.setReuse(true);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-API-Key", API_KEY);
-    http.addHeader("Connection", "keep-alive");
     http.setTimeout(3000);
 
     int code = http.POST(json);
