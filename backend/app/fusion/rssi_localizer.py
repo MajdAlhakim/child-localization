@@ -111,31 +111,43 @@ def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+def _prefix(bssid: str) -> str:
+    """First 5 octets of a BSSID — identifies a physical AP across its virtual SSIDs."""
+    return bssid.lower().rsplit(":", 1)[0]
+
+
 def localize(
     scan: list[dict],       # [{"bssid": str, "rssi": int|float}, ...]
     known_aps: list[dict],  # [{"bssid", "rssi_ref", "path_loss_n", "x", "y"}, ...]
-    kalman_states: dict,    # {bssid_lower → KalmanState}; mutated in place
+    kalman_states: dict,    # {prefix → KalmanState}; mutated in place
 ) -> dict | None:
     """
     Estimate device position from a Wi-Fi scan.
 
-    Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None if no APs match.
-    The caller is responsible for persisting kalman_states between calls.
-    """
-    scan_map: dict[str, float] = {
-        entry["bssid"].lower(): float(entry["rssi"]) for entry in scan
-    }
+    BSSIDs are grouped by first 5 octets (physical AP). Multiple virtual SSIDs
+    from the same radio collapse to the strongest RSSI observation.
 
-    # Step 1: match scan to known APs, apply Kalman smoothing, estimate distances
-    anchors: list[tuple[dict, float]] = []
+    Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None if no APs match.
+    """
+    scan_by_prefix: dict[str, float] = {}
+    for entry in scan:
+        p = _prefix(entry["bssid"])
+        rssi = float(entry["rssi"])
+        if p not in scan_by_prefix or rssi > scan_by_prefix[p]:
+            scan_by_prefix[p] = rssi
+
+    known_by_prefix: dict[str, dict] = {}
     for ap in known_aps:
-        bssid = ap["bssid"].lower()
-        if bssid not in scan_map:
+        known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
+
+    anchors: list[tuple[dict, float]] = []
+    for prefix, ap in known_by_prefix.items():
+        if prefix not in scan_by_prefix:
             continue
-        raw_rssi = scan_map[bssid]
-        if bssid not in kalman_states:
-            kalman_states[bssid] = KalmanState(x=raw_rssi)
-        smoothed = kalman_states[bssid].update(raw_rssi)
+        raw_rssi = scan_by_prefix[prefix]
+        if prefix not in kalman_states:
+            kalman_states[prefix] = KalmanState(x=raw_rssi)
+        smoothed = kalman_states[prefix].update(raw_rssi)
         dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], smoothed)
         anchors.append((ap, dist))
 
@@ -147,7 +159,7 @@ def localize(
 
     # Step 3: average |observed − model| RSSI as a quality metric
     avg_error = sum(
-        abs(scan_map[ap["bssid"].lower()] -
+        abs(scan_by_prefix[_prefix(ap["bssid"])] -
             (ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(max(dist, 0.001))))
         for ap, dist in anchors
     ) / len(anchors)
