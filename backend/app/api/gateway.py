@@ -57,7 +57,7 @@ _ap_cache_ts: float   = 0.0
 _AP_CACHE_TTL: float  = 60.0   # seconds
 
 # ── Minimum RSSI anchors needed before we snap PDR to RSSI ───────────────────
-_MIN_RSSI_ANCHORS: int = 2
+_MIN_RSSI_ANCHORS: int = 1
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
