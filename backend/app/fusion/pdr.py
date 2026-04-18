@@ -19,7 +19,7 @@ class PDREngine:
     # expires from the buffer before the cooldown ends, preventing the lingering
     # peak from triggering a false detection immediately after the cooldown.
     MIN_STEP_DT_MS: float = 500.0       # was 350 — must exceed STEP_BUFFER_MS
-    STD_FACTOR: float = 1.2             # retuned for belt-clip deployment (was 2.0, SDP1)
+    STD_FACTOR: float = 1.0             # retuned for belt-clip deployment (was 2.0, SDP1)
     SWING_FACTOR: float = 0.9
     MIN_STD: float = 0.3                # retuned for weaker coupling (was 0.5, SDP1)
     MIN_MEAN_DELTA: float = 0.1
