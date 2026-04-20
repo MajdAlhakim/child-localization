@@ -1,7 +1,12 @@
+import asyncio
 import json
 from datetime import datetime, timezone
 
 from fastapi import WebSocket
+
+# Max time to wait for a single ws.send_text — stale/half-dead clients must
+# not block the gateway packet handler (which broadcasts per IMU sample).
+_SEND_TIMEOUT_S = 0.5
 
 
 class PositionBroadcaster:
@@ -57,8 +62,8 @@ class PositionBroadcaster:
         dead: set[WebSocket] = set()
         for ws in set(self._connections[tag_id]):
             try:
-                await ws.send_text(message)
-            except Exception:
+                await asyncio.wait_for(ws.send_text(message), timeout=_SEND_TIMEOUT_S)
+            except (asyncio.TimeoutError, Exception):
                 dead.add(ws)
 
         # Clean up dead connections
