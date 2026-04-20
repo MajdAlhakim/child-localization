@@ -3,10 +3,10 @@ backend/app/api/gateway.py
 
 POST /api/v1/gateway/packet
 
-Receives JSON packets from the XIAO ESP32-C5 tag.
+Receives JSON packets from the Beetle ESP32-C6 tag.
 Packet format:
 {
-    "mac":  "24:42:E3:15:E5:72",
+    "mac":  "9C:9E:6E:77:17:50",
     "ts":   12450,
     "imu":  [{"ts":.., "ax":.., "ay":.., "az":.., "gx":.., "gy":.., "gz":..}, ...],
     "wifi": [{"bssid":"..", "ssid":"..", "rssi":-46, "ch":6}, ...]
@@ -118,7 +118,7 @@ async def receive_packet(
     x_api_key: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Receive a packet from the ESP32-C5 tag, run PDR + RSSI fusion, return 200."""
+    """Receive a packet from the Beetle C6 tag, run PDR + RSSI fusion, return 200."""
 
     # ── Auth ──────────────────────────────────────────────────────────────────
     expected_key = os.environ.get("GATEWAY_API_KEY", "")
