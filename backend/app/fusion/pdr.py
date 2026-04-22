@@ -18,12 +18,12 @@ class PDREngine:
     # INVARIANT: MIN_STEP_DT_MS must be > STEP_BUFFER_MS so the old step peak
     # expires from the buffer before the cooldown ends, preventing the lingering
     # peak from triggering a false detection immediately after the cooldown.
-    MIN_STEP_DT_MS: float = 300.0       # was 350 — must exceed STEP_BUFFER_MS
+    MIN_STEP_DT_MS: float = 600.0       # must exceed STEP_BUFFER_MS (was 300)
     STD_FACTOR: float = 0.8             # retuned for belt-clip deployment (was 2.0, SDP1)
     SWING_FACTOR: float = 0.7
     MIN_STD: float = 0.3                # retuned for weaker coupling (was 0.5, SDP1)
     MIN_MEAN_DELTA: float = 0.1
-    STEP_BUFFER_MS: float = 200.0       # was 500 — must be < MIN_STEP_DT_MS
+    STEP_BUFFER_MS: float = 500.0       # 500ms captures a full step cycle at 100Hz (was 200)
 
     # ── Weinberg stride ───────────────────────────────────────────────────────
     K_WEIN: float = 0.47
