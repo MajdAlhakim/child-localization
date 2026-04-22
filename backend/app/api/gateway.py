@@ -166,13 +166,17 @@ async def receive_packet(
                     rssi_result["anchor_count"], rssi_result["avg_rssi_error"],
                 )
 
-    # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
-    # This corrects PDR drift every ~10 s (Beetle scan interval).
+    # ── Blend PDR toward RSSI estimate (soft anchor — no hard teleport) ──────
+    # Alpha scales with anchor count: 1 anchor→0.4, 3→0.6, 5+→0.8.
+    # This prevents the visible position jump every ~10 s while still
+    # correcting PDR drift. PDR is allowed to walk freely between scans.
     if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
-        state.pdr.x = rssi_result["x"]
-        state.pdr.y = rssi_result["y"]
+        alpha = min(0.8, 0.2 * rssi_result["anchor_count"])
+        state.pdr.x = alpha * rssi_result["x"] + (1.0 - alpha) * state.pdr.x
+        state.pdr.y = alpha * rssi_result["y"] + (1.0 - alpha) * state.pdr.y
         logger.info(
-            "  PDR anchored to RSSI: (%.2f, %.2f)", rssi_result["x"], rssi_result["y"]
+            "  PDR blended toward RSSI (α=%.2f): pdr=(%.2f,%.2f) rssi=(%.2f,%.2f)",
+            alpha, state.pdr.x, state.pdr.y, rssi_result["x"], rssi_result["y"],
         )
 
     # ── Run PDR on each IMU sample — broadcast immediately once calibrated ────
