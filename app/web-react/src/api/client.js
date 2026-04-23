@@ -41,10 +41,18 @@ export const venueApi = {
 
 // Floor plan endpoints
 export const floorPlanApi = {
-  create:   (venueId, formData) => apiFetch('POST', `/api/v1/venues/${venueId}/floor-plans`, formData, true),
-  getImage: (fpId)              => apiFetch('GET',  `/api/v1/floor-plans/${fpId}/image`),
-  putImage: (fpId, formData)    => apiFetch('POST', `/api/v1/floor-plans/${fpId}/image`, formData, true),
-  getGrid:  (fpId)              => apiJSON('GET',   `/api/v1/floor-plans/${fpId}/grid`),
+  create:     (venueId, formData)        => apiFetch('POST', `/api/v1/venues/${venueId}/floor-plans`, formData, true),
+  createMeta: (venueId, name, floorNum) => {
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('floor_number', String(floorNum));
+    return apiFetch('POST', `/api/v1/venues/${venueId}/floor-plans`, fd, true);
+  },
+  getImage: (fpId)           => apiFetch('GET',  `/api/v1/floor-plans/${fpId}/image`),
+  putImage: (fpId, formData) => apiFetch('POST', `/api/v1/floor-plans/${fpId}/image`, formData, true),
+  getGrid:  (fpId)           => apiJSON('GET',   `/api/v1/floor-plans/${fpId}/grid`),
+  getAPs:   (fpId)           => apiJSON('GET',   `/api/v1/floor-plans/${fpId}/aps`),
+  delete:   (fpId)           => apiJSON('DELETE', `/api/v1/floor-plans/${fpId}`),
 };
 
 // Legacy venue endpoints (use X-Floor-Plan-Id header routing)

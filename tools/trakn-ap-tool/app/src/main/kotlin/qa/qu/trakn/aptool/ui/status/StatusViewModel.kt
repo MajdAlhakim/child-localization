@@ -50,8 +50,9 @@ class StatusViewModel(
     private suspend fun fetchAps() {
         try {
             val settings = settingsRepo.settings.first()
+            val fpid = settings.selectedFloorPlanId.ifEmpty { return }
             val api = RetrofitClient.get(settings.apiBaseUrl)
-            val resp = api.getAps(settings.apiKey)
+            val resp = api.getFloorPlanAps(fpid, settings.apiKey)
             _state.update {
                 it.copy(aps = resp.accessPoints, backendConnected = true, lastSuccessMs = System.currentTimeMillis())
             }
@@ -75,8 +76,12 @@ class StatusViewModel(
             _state.update { it.copy(isDeleting = true, showDeleteConfirm = false) }
             try {
                 val settings = settingsRepo.settings.first()
+                val fpid = settings.selectedFloorPlanId.ifEmpty {
+                    _state.update { it.copy(snackbarMsg = "No floor plan selected", isDeleting = false) }
+                    return@launch
+                }
                 val api = RetrofitClient.get(settings.apiBaseUrl)
-                api.deleteAllAps(settings.apiKey)
+                api.deleteFloorPlanAps(fpid, settings.apiKey)
                 _state.update { it.copy(aps = emptyList(), snackbarMsg = "All APs cleared", isDeleting = false) }
             } catch (e: Exception) {
                 _state.update { it.copy(snackbarMsg = "Delete failed: ${e.message}", isDeleting = false) }

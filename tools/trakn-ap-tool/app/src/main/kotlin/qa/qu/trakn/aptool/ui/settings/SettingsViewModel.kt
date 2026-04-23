@@ -12,11 +12,18 @@ import kotlinx.coroutines.launch
 import qa.qu.trakn.aptool.data.SettingsRepository
 import qa.qu.trakn.aptool.data.api.RetrofitClient
 import qa.qu.trakn.aptool.data.models.AppSettings
+import qa.qu.trakn.aptool.data.models.FloorPlanSummary
+import qa.qu.trakn.aptool.data.models.VenueSummary
 
 data class SettingsUiState(
     val settings: AppSettings = AppSettings(),
     val testResult: String? = null,
     val isTesting: Boolean = false,
+    // Floor plan picker state
+    val showFloorPlanPicker: Boolean = false,
+    val venues: List<VenueSummary> = emptyList(),
+    val isLoadingVenues: Boolean = false,
+    val venueLoadError: String? = null,
 )
 
 class SettingsViewModel(
@@ -59,5 +66,38 @@ class SettingsViewModel(
                 _state.update { it.copy(testResult = "✗ ${e.message}", isTesting = false) }
             }
         }
+    }
+
+    fun openFloorPlanPicker() {
+        _state.update { it.copy(showFloorPlanPicker = true, venueLoadError = null) }
+        viewModelScope.launch {
+            _state.update { it.copy(isLoadingVenues = true) }
+            try {
+                val s = _state.value.settings
+                val api = RetrofitClient.get(s.apiBaseUrl)
+                val response = api.getVenues()
+                _state.update { it.copy(venues = response.venues, isLoadingVenues = false) }
+            } catch (e: Exception) {
+                _state.update { it.copy(venueLoadError = e.message, isLoadingVenues = false) }
+            }
+        }
+    }
+
+    fun dismissFloorPlanPicker() {
+        _state.update { it.copy(showFloorPlanPicker = false) }
+    }
+
+    fun selectFloorPlan(fp: FloorPlanSummary, venueName: String) {
+        val display = "$venueName — Floor ${fp.floorNumber}"
+        _state.update {
+            it.copy(
+                settings = it.settings.copy(
+                    selectedFloorPlanId = fp.id,
+                    selectedFloorPlanDisplay = display,
+                ),
+                showFloorPlanPicker = false,
+            )
+        }
+        save()
     }
 }

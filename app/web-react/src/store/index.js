@@ -32,6 +32,16 @@ export const useStore = create((set, get) => ({
   setActiveFp:   (id)          => { set({ activeFpId: id });    localStorage.setItem('trakn_active_fp', id || ''); },
   addVenue:      (venue)       => set(s => ({ allVenues: [...s.allVenues, { ...venue, floor_plans: [] }] })),
   removeVenue:   (id)          => set(s => ({ allVenues: s.allVenues.filter(v => v.id !== id) })),
+  addFloorPlanToVenue: (venueId, fp) => set(s => ({
+    allVenues: s.allVenues.map(v =>
+      v.id === venueId ? { ...v, floor_plans: [...(v.floor_plans || []), fp] } : v
+    ),
+  })),
+  removeFloorPlanFromVenue: (venueId, fpId) => set(s => ({
+    allVenues: s.allVenues.map(v =>
+      v.id === venueId ? { ...v, floor_plans: (v.floor_plans || []).filter(f => f.id !== fpId) } : v
+    ),
+  })),
 
   // ── Floor plan
   floorPlanLoaded: false,

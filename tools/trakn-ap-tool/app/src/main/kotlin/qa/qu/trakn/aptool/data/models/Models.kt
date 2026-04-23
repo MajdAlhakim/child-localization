@@ -66,6 +66,32 @@ data class ScannedAp(
     val alreadyPlaced: Boolean = false,
 )
 
+// Venue / floor-plan discovery models
+data class FloorPlanSummary(
+    val id: String,
+    @SerializedName("venue_id") val venueId: String,
+    val name: String,
+    @SerializedName("floor_number") val floorNumber: Int,
+    @SerializedName("has_image") val hasImage: Boolean,
+    @SerializedName("ap_count") val apCount: Int,
+)
+
+data class VenueSummary(
+    val id: String,
+    val name: String,
+    val description: String,
+    @SerializedName("floor_plans") val floorPlans: List<FloorPlanSummary>,
+)
+
+data class VenuesResponse(
+    val venues: List<VenueSummary>,
+)
+
+// Batch AP upsert body — matches POST /api/v1/floor-plans/{fpid}/aps
+data class ApGroupUpsertRequest(
+    @SerializedName("access_points") val accessPoints: List<PostApRequest>,
+)
+
 // Settings
 data class AppSettings(
     val apiBaseUrl: String = "https://35.238.189.188",
@@ -77,4 +103,7 @@ data class AppSettings(
     // subtracted from raw one-sided RTT readings.  Typical range 2400–2700 m depending on AP model.
     // See Horn 2022 §8 — calibrate this value against a known distance for best accuracy.
     val oneSidedRttOffsetM: Double = 2500.0,
+    // Active floor plan — empty string means none selected yet
+    val selectedFloorPlanId: String = "",
+    val selectedFloorPlanDisplay: String = "",  // e.g. "Building H07 — Floor 1"
 )

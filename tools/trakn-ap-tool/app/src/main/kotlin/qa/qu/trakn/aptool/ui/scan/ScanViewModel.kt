@@ -103,8 +103,10 @@ class ScanViewModel(
             while (true) {
                 try {
                     val settings = settingsRepo.settings.first()
+                    val fpid = settings.selectedFloorPlanId
+                    if (fpid.isEmpty()) { delay(10_000); continue }
                     val api = RetrofitClient.get(settings.apiBaseUrl)
-                    val response = api.getAps(settings.apiKey)
+                    val response = api.getFloorPlanAps(fpid, settings.apiKey)
                     placedBssids = response.accessPoints.map { it.bssid }.toMutableSet()
                     _state.update { s ->
                         s.copy(aps = s.aps.map { ap ->
