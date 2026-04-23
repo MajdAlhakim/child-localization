@@ -239,6 +239,47 @@ async def receive_packet(
     }
 
 
+@router.post("/api/v1/tags/{tag_id}/reset", status_code=status.HTTP_200_OK)
+async def reset_tag_pdr(
+    tag_id: str,
+    x_api_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Reset the PDR position and heading for a tag to (0, 0, 0°).
+
+    Call this from the parent app when the child is placed at the known
+    starting position facing the +X direction of the floor plan.
+    Gyro bias calibration is preserved — only navigation state is cleared.
+    """
+    expected_key = os.environ.get("GATEWAY_API_KEY", "")
+    if not x_api_key or x_api_key != expected_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key",
+        )
+
+    mac = registry.mac_for(tag_id)
+    if mac is None:
+        raise HTTPException(status_code=404, detail=f"Tag {tag_id!r} not registered")
+
+    state = device_states.get(mac)
+    if state is None:
+        raise HTTPException(status_code=404, detail=f"Tag {tag_id!r} has no active session")
+
+    state.pdr.reset()
+    logger.info("PDR reset  tag_id=%s  mac=%s", tag_id, mac)
+
+    # Broadcast the reset position so the app updates immediately
+    await broadcaster.broadcast(tag_id, {
+        "x": 0.0, "y": 0.0, "heading": 0.0, "heading_deg": 0.0,
+        "step_count": 0, "bias_calibrated": state.pdr.bias_calibrated,
+        "source": "reset", "mode": "reset", "confidence": 0.0,
+        "tag_id": tag_id, "rssi_anchors": None, "rssi_error": None,
+    })
+
+    return {"status": "ok", "tag_id": tag_id, "mac": mac}
+
+
 @router.get("/api/v1/position/{mac}", status_code=status.HTTP_200_OK)
 async def get_position(mac: str) -> dict[str, Any]:
     """Return the current PDR position for a device (for local visualizers)."""
