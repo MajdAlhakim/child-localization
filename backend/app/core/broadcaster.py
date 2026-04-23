@@ -55,6 +55,10 @@ class PositionBroadcaster:
             # RSSI localization info — None when no scan in this packet
             "rssi_anchors":    position.get("rssi_anchors"),
             "rssi_error":      position.get("rssi_error"),
+            # Diagnostic gyro axes — watch these while physically turning the tag
+            "dbg_gx":          position.get("dbg_gx", 0.0),
+            "dbg_gy":          position.get("dbg_gy", 0.0),
+            "dbg_gz":          position.get("dbg_gz", 0.0),
             "ts":              datetime.now(timezone.utc).isoformat(),
         })
 
