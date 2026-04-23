@@ -18,12 +18,12 @@ class PDREngine:
     # INVARIANT: MIN_STEP_DT_MS must be > STEP_BUFFER_MS so the old step peak
     # expires from the buffer before the cooldown ends, preventing the lingering
     # peak from triggering a false detection immediately after the cooldown.
-    MIN_STEP_DT_MS: float = 600.0       # must exceed STEP_BUFFER_MS (was 300)
+    MIN_STEP_DT_MS: float = 400.0       # cooldown — must exceed STEP_BUFFER_MS (was 600)
     STD_FACTOR: float = 0.8             # retuned for belt-clip deployment (was 2.0, SDP1)
     SWING_FACTOR: float = 0.7
     MIN_STD: float = 0.3                # retuned for weaker coupling (was 0.5, SDP1)
-    MIN_MEAN_DELTA: float = 0.1
-    STEP_BUFFER_MS: float = 500.0       # 500ms captures a full step cycle at 100Hz (was 200)
+    MIN_MEAN_DELTA: float = 0.05        # relaxed — 500ms buffer averages mean close to 9.8
+    STEP_BUFFER_MS: float = 300.0       # 300ms = half-step → mean deviates from 9.8 (was 500)
 
     # ── Weinberg stride ───────────────────────────────────────────────────────
     K_WEIN: float = 0.47
@@ -40,6 +40,13 @@ class PDREngine:
 
         self.a_mag_filt: float = 9.8
         self.gy_filt: float = 0.0   # yaw-axis EMA (Y=up mounting: gy is yaw, not gz)
+
+        # Diagnostic: last corrected (bias-removed) value for all three axes.
+        # Included in every broadcast so the correct yaw axis can be identified
+        # by watching which one changes while physically turning the tag.
+        self.dbg_gx: float = 0.0
+        self.dbg_gy: float = 0.0
+        self.dbg_gz: float = 0.0
 
         self.bias_gz: float = 0.0   # kept as gz name for compatibility but collects gy
         self.bias_samples: list[float] = []
@@ -88,6 +95,11 @@ class PDREngine:
         self.a_mag_filt = self.a_mag_filt + alpha * (a_mag - self.a_mag_filt)
         gy_corrected = gy - self.bias_gz
         self.gy_filt = self.gy_filt + alpha * (gy_corrected - self.gy_filt)
+
+        # Store bias-corrected gyro values for all axes (diagnostic only).
+        self.dbg_gx = round(gx - self.bias_gz, 4)   # bias_gz is gy-based; gx has no bias removal
+        self.dbg_gy = round(gy_corrected, 4)
+        self.dbg_gz = round(gz, 4)
 
         # Step 4 — gyro bias calibration (collect gy samples; do NOT return early
         # so the step buffer keeps filling and steps can be counted immediately)
@@ -152,4 +164,10 @@ class PDREngine:
             "heading_deg":     round(degrees(self.heading) % 360, 2),
             "step_count":      self.step_count,
             "bias_calibrated": self.bias_calibrated,
+            # Diagnostic: watch these in the WebSocket stream while physically
+            # turning the tag. The axis that swings large (±0.5–2.0 rad/s)
+            # during a turn is the correct yaw axis.
+            "dbg_gx":          self.dbg_gx,
+            "dbg_gy":          self.dbg_gy,
+            "dbg_gz":          self.dbg_gz,
         }
