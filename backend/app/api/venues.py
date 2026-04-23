@@ -365,6 +365,20 @@ async def upsert_aps(
     return {"status": "ok", "count": len(body.access_points)}
 
 
+@router.delete("/api/v1/floor-plans/{fpid}/aps", status_code=status.HTTP_200_OK)
+async def delete_all_aps(
+    fpid: uuid.UUID,
+    x_api_key: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    _check_key(x_api_key)
+    result = await db.execute(
+        delete(AccessPoint).where(AccessPoint.floor_plan_id == fpid)
+    )
+    await db.commit()
+    return {"status": "ok", "deleted": result.rowcount}
+
+
 @router.delete("/api/v1/floor-plans/{fpid}/aps/{bssid:path}", status_code=status.HTTP_200_OK)
 async def delete_ap(
     fpid: uuid.UUID,
