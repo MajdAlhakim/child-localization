@@ -22,3 +22,8 @@ class DeviceState:
     # Per-BSSID Kalman filter states for RSSI smoothing.
     # {bssid_lower → KalmanState} — populated by rssi_localizer.localize()
     kalman_states: dict = field(default_factory=dict)
+
+    # Active floor resolved from the last Wi-Fi scan (majority BSSID vote).
+    # None until the first scan with at least one known AP arrives.
+    active_floor_plan_id: str | None = None
+    active_floor_number: int | None = None

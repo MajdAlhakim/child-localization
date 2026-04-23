@@ -36,7 +36,7 @@ from ..fusion.device_state import DeviceState
 from ..fusion.rssi_localizer import localize as rssi_localize
 from ..fusion.tag_registry import registry
 from ..core.broadcaster import broadcaster
-from ..models import AccessPoint as APModel
+from ..models import AccessPoint as APModel, FloorPlan as FPModel
 
 logger = logging.getLogger("trakn.gateway")
 logging.basicConfig(
@@ -88,14 +88,16 @@ class GatewayPacket(BaseModel):
 
 # ── AP cache helper ───────────────────────────────────────────────────────────
 
-def _ap_to_dict(ap: APModel) -> dict:
+def _ap_to_dict(ap: APModel, floor_number: int) -> dict:
     return {
-        "bssid":        ap.bssid,
-        "ssid":         ap.ssid,
-        "rssi_ref":     ap.rssi_ref,
-        "path_loss_n":  ap.path_loss_n,
-        "x":            ap.x,
-        "y":            ap.y,
+        "bssid":          ap.bssid,
+        "ssid":           ap.ssid,
+        "rssi_ref":       ap.rssi_ref,
+        "path_loss_n":    ap.path_loss_n,
+        "x":              ap.x,
+        "y":              ap.y,
+        "floor_plan_id":  str(ap.floor_plan_id),
+        "floor_number":   floor_number,
     }
 
 async def _refresh_ap_cache_if_stale(db: AsyncSession) -> None:
@@ -103,11 +105,17 @@ async def _refresh_ap_cache_if_stale(db: AsyncSession) -> None:
     global _ap_cache, _ap_cache_ts
     if _ap_cache and (time.time() - _ap_cache_ts) < _AP_CACHE_TTL:
         return
-    result = await db.execute(select(APModel))
-    aps = result.scalars().all()
-    _ap_cache = [_ap_to_dict(a) for a in aps]
+    result = await db.execute(
+        select(APModel, FPModel.floor_number)
+        .join(FPModel, APModel.floor_plan_id == FPModel.id)
+    )
+    _ap_cache = [_ap_to_dict(ap, floor_number) for ap, floor_number in result.all()]
     _ap_cache_ts = time.time()
-    logger.info("AP cache refreshed — %d APs loaded", len(_ap_cache))
+    logger.info(
+        "AP cache refreshed — %d APs across %d floor plans",
+        len(_ap_cache),
+        len({e["floor_plan_id"] for e in _ap_cache}),
+    )
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -166,6 +174,24 @@ async def receive_packet(
                     rssi_result["anchor_count"], rssi_result["avg_rssi_error"],
                 )
 
+            # Determine active floor: majority vote across BSSIDs seen in this scan
+            scan_bssids = {ap.bssid.lower() for ap in wifi}
+            floor_votes: dict[str, int] = {}
+            floor_number_map: dict[str, int] = {}
+            for entry in _ap_cache:
+                if entry["bssid"].lower() in scan_bssids:
+                    fp_id = entry["floor_plan_id"]
+                    floor_votes[fp_id] = floor_votes.get(fp_id, 0) + 1
+                    floor_number_map[fp_id] = entry["floor_number"]
+            if floor_votes:
+                best_fp_id = max(floor_votes, key=lambda k: floor_votes[k])
+                state.active_floor_plan_id = best_fp_id
+                state.active_floor_number  = floor_number_map[best_fp_id]
+                logger.info(
+                    "  Floor: floor_plan_id=%s floor_number=%d (votes=%s)",
+                    best_fp_id, state.active_floor_number, floor_votes,
+                )
+
     # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
     # This corrects PDR drift every ~10 s (Beetle scan interval).
     if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
@@ -204,12 +230,14 @@ async def receive_packet(
                 confidence = 0.0
 
             msg = dict(pdr_result)
-            msg["source"]        = source
-            msg["mode"]          = "fused" if source == "rssi_anchored" else "imu_only"
-            msg["confidence"]    = confidence
-            msg["tag_id"]        = tag_id
-            msg["rssi_anchors"]  = rssi_result["anchor_count"]   if rssi_result else None
-            msg["rssi_error"]    = rssi_result["avg_rssi_error"] if rssi_result else None
+            msg["source"]          = source
+            msg["mode"]            = "fused" if source == "rssi_anchored" else "imu_only"
+            msg["confidence"]      = confidence
+            msg["tag_id"]          = tag_id
+            msg["rssi_anchors"]    = rssi_result["anchor_count"]   if rssi_result else None
+            msg["rssi_error"]      = rssi_result["avg_rssi_error"] if rssi_result else None
+            msg["floor_plan_id"]   = state.active_floor_plan_id
+            msg["floor_number"]    = state.active_floor_number
             await broadcaster.broadcast(tag_id, msg)
 
     # ── Log PDR output ────────────────────────────────────────────────────────

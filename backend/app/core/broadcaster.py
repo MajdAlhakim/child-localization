@@ -55,6 +55,9 @@ class PositionBroadcaster:
             # RSSI localization info — None when no scan in this packet
             "rssi_anchors":    position.get("rssi_anchors"),
             "rssi_error":      position.get("rssi_error"),
+            # Floor resolved from last Wi-Fi scan — None until first scan with a known AP
+            "floor_plan_id":   position.get("floor_plan_id"),
+            "floor_number":    position.get("floor_number"),
             "ts":              datetime.now(timezone.utc).isoformat(),
         })
 
