@@ -35,7 +35,7 @@
 #define WIFI_SSID "QU User"
 #define WIFI_PASS "" // QU: SSID="QU-User", PASS=""
 #define SERVER_URL "https://35.238.189.188/api/v1/gateway/packet"
-#define DEVICE_MAC "24:42:E3:15:E5:72"
+#define DEVICE_MAC "9C:9E:6E:77:17:50"
 #define API_KEY                                                                \
   "580a92b1cad8ad81b7ae90c23fb222443d9c87aac4ce4a7728a3f9e99e3e4990"
 
@@ -54,12 +54,12 @@
 #define MAX_APS 30
 #define IMU_BATCH_SIZE 25
 #define IMU_DRAIN_SIZE 25
-#define POST_INTERVAL_MS 200
+#define POST_INTERVAL_MS 1000
 
 // ── UART (from Beetle ESP32-C6)
 // ───────────────────────────────────────────────
-#define UART_RX_PIN 12 // GPIO12 = D7 on XIAO ESP32-C5
-#define UART_TX_PIN 11 // GPIO11 = D6 (unused — C6 never receives)
+#define UART_RX_PIN 17 // GPIO12 = D7 on XIAO ESP32-C5
+#define UART_TX_PIN 16 // GPIO11 = D6 (unused — C6 never receives)
 #define UART_BAUD 115200
 #define UART_BUF_SIZE 3072 // 30 APs × ~80 bytes each = ~2400 bytes max line
 
@@ -83,6 +83,7 @@ struct ImuSample {
 static APRecord ap_list[MAX_APS];
 static int ap_count = 0;
 static bool ap_fresh = false;
+static uint32_t ap_scan_seq = 0;     // incremented on every new scan
 static SemaphoreHandle_t ap_mutex = NULL;
 
 static ImuSample imu_batch[IMU_BATCH_SIZE];
@@ -90,6 +91,7 @@ static int imu_batch_idx = 0;
 static SemaphoreHandle_t imu_mutex = NULL;
 
 static bool wifi_connected = false;
+static volatile bool wifi_reassociated = false;  // set by wifi_task after any WiFi.begin()
 
 // ── IMU helpers
 // ───────────────────────────────────────────────────────────────
@@ -101,7 +103,7 @@ static void writeReg(uint8_t reg, uint8_t val) {
 }
 
 static void imu_init() {
-  Wire.begin();
+  Wire.begin(19, 20);
   Wire.setClock(400000);
   delay(200);
   writeReg(PWR_MGMT_1, 0x00);
@@ -117,12 +119,23 @@ static void imu_init() {
 // ─────────────────────────────────────────────────────────
 static void imu_task(void *arg) {
   TickType_t last = xTaskGetTickCount();
+  static uint32_t ok_count = 0, err_count = 0;
   while (1) {
     Wire.beginTransmission((uint8_t)MPU6050_ADDR);
     Wire.write(ACCEL_XOUT_H);
     Wire.endTransmission(false);
-    uint8_t n =
-        Wire.requestFrom((uint8_t)MPU6050_ADDR, (uint8_t)14, (bool)true);
+    Wire.setTimeout(50);
+    uint8_t n = Wire.requestFrom((uint8_t)MPU6050_ADDR, (uint8_t)14, (bool)true);
+    // if(n!= 14){
+    //   Serial.println("[IMU] read failed");
+    // }
+
+
+    if (n == 14) ok_count++; else err_count++;
+    if ((ok_count + err_count) % 200 == 0)
+      Serial.printf("[IMU] ok=%lu err=%lu batch=%d\n",
+                    (unsigned long)ok_count, (unsigned long)err_count,
+                    imu_batch_idx);
 
     if (n == 14) {
       int16_t ax_r = (int16_t)((Wire.read() << 8) | Wire.read());
@@ -235,6 +248,7 @@ static void uart_task(void *arg) {
             memcpy(ap_list, parsed, sizeof(APRecord) * parsed_count);
             ap_count = parsed_count;
             ap_fresh = true;
+            ap_scan_seq++;
             xSemaphoreGive(ap_mutex);
           }
           Serial.printf("[UART] %d APs from Beetle C6\n", parsed_count);
@@ -253,39 +267,135 @@ static void uart_task(void *arg) {
   }
 }
 
-// ── Wi-Fi task — connection maintenance
-// ───────────────────────────────────────
+// Pick the strongest BSSID from the scanner's list that matches WIFI_SSID and
+// initiate a direct association (no ESP32 scan).
+static void connect_to_best_ap() {
+  // Avoid WiFi.begin() while the radio is already in the middle of an
+  // association attempt — causes "sta is connecting, cannot set config".
+  wl_status_t st = WiFi.status();
+  if (st == WL_IDLE_STATUS || st == WL_DISCONNECTED || st == WL_CONNECTED) {
+    // OK to proceed (WL_CONNECTED means we intentionally switch BSSID)
+  } else {
+    return;
+  }
+
+  APRecord best;
+  int  best_rssi = -1000;
+  bool found     = false;
+
+  if (xSemaphoreTake(ap_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    for (int i = 0; i < ap_count; i++) {
+      if (strcmp(ap_list[i].ssid, WIFI_SSID) != 0) continue;
+      if (ap_list[i].rssi > best_rssi) {
+        best      = ap_list[i];
+        best_rssi = ap_list[i].rssi;
+        found     = true;
+      }
+    }
+    xSemaphoreGive(ap_mutex);
+  }
+
+  if (!found) {
+    Serial.println("[WIFI] no scanner data for SSID yet — SSID-only connect");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    wifi_reassociated = true;
+    return;
+  }
+
+  uint8_t bssid[6];
+  sscanf(best.bssid, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+         &bssid[0], &bssid[1], &bssid[2],
+         &bssid[3], &bssid[4], &bssid[5]);
+
+  Serial.printf("[WIFI] targeting bssid=%s rssi=%d ch=%d\n",
+                best.bssid, best.rssi, best.channel);
+  WiFi.begin(WIFI_SSID, WIFI_PASS, best.channel, bssid, true);
+  wifi_reassociated = true;
+}
+
+// Check whether the currently-associated BSSID appears in the latest scan.
+// Called under no lock — takes ap_mutex internally.
+static bool current_bssid_in_scan() {
+  uint8_t *cur = WiFi.BSSID();
+  if (cur == NULL) return false;
+
+  char cur_str[18];
+  snprintf(cur_str, sizeof(cur_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+           cur[0], cur[1], cur[2], cur[3], cur[4], cur[5]);
+
+  bool found = false;
+  if (xSemaphoreTake(ap_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    for (int i = 0; i < ap_count; i++) {
+      if (strcasecmp(ap_list[i].bssid, cur_str) == 0) {
+        found = true;
+        break;
+      }
+    }
+    xSemaphoreGive(ap_mutex);
+  }
+  return found;
+}
+
+// ── Wi-Fi task — scan-driven BSSID selection ────────────────────────────────
+// Policy (simple): every time a new scan arrives, if our current BSSID is
+// still in the list we stay. Otherwise jump to the strongest AP in the scan.
 static void wifi_task(void *arg) {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
 
   Serial.print("[WIFI] connecting to ");
   Serial.println(WIFI_SSID);
 
-  int retries = 0;
-  while (WiFi.status() != WL_CONNECTED && retries < 150) {
+  // Wait up to 12 s for the scanner's first AP list, then aim at best BSSID.
+  for (int i = 0; i < 120; i++) {
+    if (ap_fresh) break;
     vTaskDelay(pdMS_TO_TICKS(100));
-    retries++;
   }
+  connect_to_best_ap();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    wifi_connected = true;
-    Serial.print("[WIFI] connected, IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("[WIFI] initial connect failed — retrying");
-  }
+  uint32_t last_processed_scan_seq = 0;
+  unsigned long last_reconnect_ms = 0;
 
   while (1) {
-    if (WiFi.status() != WL_CONNECTED) {
-      wifi_connected = false;
-      Serial.println("[WIFI] reconnecting...");
-      WiFi.reconnect();
-      vTaskDelay(pdMS_TO_TICKS(3000));
+    wifi_connected = (WiFi.status() == WL_CONNECTED);
+
+    if (!wifi_connected) {
+      if (millis() - last_reconnect_ms < 3000) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+      last_reconnect_ms = millis();
+      Serial.println("[WIFI] disconnected — reconnecting to best AP");
+      connect_to_best_ap();
+
+      int tries = 0;
+      while (WiFi.status() != WL_CONNECTED && tries < 30) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        tries++;
+      }
+      if (WiFi.status() == WL_CONNECTED) {
+        wifi_connected = true;
+        Serial.printf("[WIFI] reconnected IP=%s rssi=%d\n",
+                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      }
     } else {
-      wifi_connected = true;
+      // Connected — only act when a new scan has arrived
+      uint32_t seq;
+      if (xSemaphoreTake(ap_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        seq = ap_scan_seq;
+        xSemaphoreGive(ap_mutex);
+      } else {
+        seq = last_processed_scan_seq;
+      }
+
+      if (seq != last_processed_scan_seq) {
+        last_processed_scan_seq = seq;
+        if (!current_bssid_in_scan()) {
+          Serial.println("[WIFI] current BSSID missing from new scan — jumping to strongest");
+          connect_to_best_ap();
+        }
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 }
 
@@ -303,6 +413,14 @@ static void post_task(void *arg) {
     vTaskDelay(pdMS_TO_TICKS(POST_INTERVAL_MS));
     if (!wifi_connected)
       continue;
+
+    // If Wi-Fi re-associated (roam or reconnect), the old TLS socket is dead —
+    // drop it so the next POST does a fresh handshake on the new AP.
+    if (wifi_reassociated) {
+      wifi_reassociated = false;
+      client.stop();
+      Serial.println("[POST] client reset after Wi-Fi re-association");
+    }
 
     // Drain IMU_DRAIN_SIZE samples from front of buffer
     ImuSample batch_copy[IMU_DRAIN_SIZE];
@@ -322,8 +440,13 @@ static void post_task(void *arg) {
       xSemaphoreGive(imu_mutex);
     }
 
-    if (drain_size == 0)
+    if (drain_size == 0) {
+      static uint32_t silent_ticks = 0;
+      if (++silent_ticks % 25 == 0)
+        Serial.printf("[POST] idle — imu_batch_idx=%d (IMU not producing)\n",
+                      imu_batch_idx);
       continue;
+    }
 
     // Snapshot AP list if fresh data from Beetle C6
     APRecord ap_copy[MAX_APS];
@@ -373,13 +496,17 @@ static void post_task(void *arg) {
     json += "]}";
 
     // POST
+    Serial.printf("[POST] RSSI=%d IP=%s\n",
+                  WiFi.RSSI(),
+                  WiFi.localIP().toString().c_str());
+
     HTTPClient http;
     http.begin(client, SERVER_URL);
-    http.setReuse(true);
+    http.setReuse(false);
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-API-Key", API_KEY);
-    http.addHeader("Connection", "keep-alive");
-    http.setTimeout(3000);
+    http.addHeader("Connection", "close");
+    http.setTimeout(5000);
 
     int code = http.POST(json);
 
@@ -389,6 +516,11 @@ static void post_task(void *arg) {
     } else {
       Serial.printf("[POST] failed: %s (buf=%d)\n",
                     http.errorToString(code).c_str(), imu_batch_idx);
+      // Stale TLS socket (often after a Wi-Fi roam) — drop it so the next
+      // iteration does a fresh handshake instead of waiting on a dead peer.
+      http.end();
+      client.stop();
+      continue;
     }
 
     http.end();

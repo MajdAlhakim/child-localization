@@ -166,17 +166,13 @@ async def receive_packet(
                     rssi_result["anchor_count"], rssi_result["avg_rssi_error"],
                 )
 
-    # ── Blend PDR toward RSSI estimate (soft anchor — no hard teleport) ──────
-    # Alpha scales with anchor count: 1 anchor→0.4, 3→0.6, 5+→0.8.
-    # This prevents the visible position jump every ~10 s while still
-    # correcting PDR drift. PDR is allowed to walk freely between scans.
+    # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
+    # This corrects PDR drift every ~10 s (Beetle scan interval).
     if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
-        alpha = min(0.8, 0.2 * rssi_result["anchor_count"])
-        state.pdr.x = alpha * rssi_result["x"] + (1.0 - alpha) * state.pdr.x
-        state.pdr.y = alpha * rssi_result["y"] + (1.0 - alpha) * state.pdr.y
+        state.pdr.x = rssi_result["x"]
+        state.pdr.y = rssi_result["y"]
         logger.info(
-            "  PDR blended toward RSSI (α=%.2f): pdr=(%.2f,%.2f) rssi=(%.2f,%.2f)",
-            alpha, state.pdr.x, state.pdr.y, rssi_result["x"], rssi_result["y"],
+            "  PDR anchored to RSSI: (%.2f, %.2f)", rssi_result["x"], rssi_result["y"]
         )
 
     # ── Run PDR on each IMU sample — broadcast immediately once calibrated ────
@@ -237,47 +233,6 @@ async def receive_packet(
         },
         "rssi": rssi_result,
     }
-
-
-@router.post("/api/v1/tags/{tag_id}/reset", status_code=status.HTTP_200_OK)
-async def reset_tag_pdr(
-    tag_id: str,
-    x_api_key: str | None = Header(default=None),
-) -> dict[str, Any]:
-    """
-    Reset the PDR position and heading for a tag to (0, 0, 0°).
-
-    Call this from the parent app when the child is placed at the known
-    starting position facing the +X direction of the floor plan.
-    Gyro bias calibration is preserved — only navigation state is cleared.
-    """
-    expected_key = os.environ.get("GATEWAY_API_KEY", "")
-    if not x_api_key or x_api_key != expected_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key",
-        )
-
-    mac = registry.mac_for(tag_id)
-    if mac is None:
-        raise HTTPException(status_code=404, detail=f"Tag {tag_id!r} not registered")
-
-    state = device_states.get(mac)
-    if state is None:
-        raise HTTPException(status_code=404, detail=f"Tag {tag_id!r} has no active session")
-
-    state.pdr.reset()
-    logger.info("PDR reset  tag_id=%s  mac=%s", tag_id, mac)
-
-    # Broadcast the reset position so the app updates immediately
-    await broadcaster.broadcast(tag_id, {
-        "x": 0.0, "y": 0.0, "heading": 0.0, "heading_deg": 0.0,
-        "step_count": 0, "bias_calibrated": state.pdr.bias_calibrated,
-        "source": "reset", "mode": "reset", "confidence": 0.0,
-        "tag_id": tag_id, "rssi_anchors": None, "rssi_error": None,
-    })
-
-    return {"status": "ok", "tag_id": tag_id, "mac": mac}
 
 
 @router.get("/api/v1/position/{mac}", status_code=status.HTTP_200_OK)

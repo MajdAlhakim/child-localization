@@ -18,12 +18,12 @@ class PDREngine:
     # INVARIANT: MIN_STEP_DT_MS must be > STEP_BUFFER_MS so the old step peak
     # expires from the buffer before the cooldown ends, preventing the lingering
     # peak from triggering a false detection immediately after the cooldown.
-    MIN_STEP_DT_MS: float = 400.0       # cooldown — must exceed STEP_BUFFER_MS (was 600)
+    MIN_STEP_DT_MS: float = 300.0       # was 350 — must exceed STEP_BUFFER_MS
     STD_FACTOR: float = 0.8             # retuned for belt-clip deployment (was 2.0, SDP1)
     SWING_FACTOR: float = 0.7
     MIN_STD: float = 0.3                # retuned for weaker coupling (was 0.5, SDP1)
-    MIN_MEAN_DELTA: float = 0.05        # relaxed — 500ms buffer averages mean close to 9.8
-    STEP_BUFFER_MS: float = 300.0       # 300ms = half-step → mean deviates from 9.8 (was 500)
+    MIN_MEAN_DELTA: float = 0.1
+    STEP_BUFFER_MS: float = 200.0       # was 500 — must be < MIN_STEP_DT_MS
 
     # ── Weinberg stride ───────────────────────────────────────────────────────
     K_WEIN: float = 0.47
@@ -39,16 +39,9 @@ class PDREngine:
         self.last_ts_ms: int | None = None
 
         self.a_mag_filt: float = 9.8
-        self.gy_filt: float = 0.0   # yaw-axis EMA (Y=up mounting: gy is yaw, not gz)
+        self.gz_filt: float = 0.0
 
-        # Diagnostic: last corrected (bias-removed) value for all three axes.
-        # Included in every broadcast so the correct yaw axis can be identified
-        # by watching which one changes while physically turning the tag.
-        self.dbg_gx: float = 0.0
-        self.dbg_gy: float = 0.0
-        self.dbg_gz: float = 0.0
-
-        self.bias_gz: float = 0.0   # kept as gz name for compatibility but collects gy
+        self.bias_gz: float = 0.0
         self.bias_samples: list[float] = []
         self.bias_calibrated: bool = False
 
@@ -56,20 +49,6 @@ class PDREngine:
         self.step_buffer_ts: list[int] = []
         self.last_step_ts_ms: int = 0
         self.step_count: int = 0
-
-    def reset(self) -> None:
-        """
-        Reset position and heading to origin. Call when child is placed at the
-        known start position facing the +X direction of the floor plan.
-        Hardware gyro bias is preserved — only navigation state is cleared.
-        """
-        self.x = 0.0
-        self.y = 0.0
-        self.heading = 0.0
-        self.step_buffer.clear()
-        self.step_buffer_ts.clear()
-        self.last_step_ts_ms = 0
-        self.step_count = 0
 
     def ingest_sample(
         self,
@@ -89,34 +68,24 @@ class PDREngine:
         a_mag = sqrt(ax ** 2 + ay ** 2 + az ** 2)
 
         # Step 3 — EMA filter
-        # Mounting: X=forward, Y=up, Z=right (right-handed).
-        # Yaw = rotation around Y → use gy, not gz.
         alpha = 1.0 - exp(-2.0 * pi * self.FC * dt)
         self.a_mag_filt = self.a_mag_filt + alpha * (a_mag - self.a_mag_filt)
-        gy_corrected = gy - self.bias_gz
-        self.gy_filt = self.gy_filt + alpha * (gy_corrected - self.gy_filt)
+        gz_corrected = gz - self.bias_gz
+        self.gz_filt = self.gz_filt + alpha * (gz_corrected - self.gz_filt)
 
-        # Store bias-corrected gyro values for all axes (diagnostic only).
-        self.dbg_gx = round(gx - self.bias_gz, 4)   # bias_gz is gy-based; gx has no bias removal
-        self.dbg_gy = round(gy_corrected, 4)
-        self.dbg_gz = round(gz, 4)
-
-        # Step 4 — gyro bias calibration (collect gy samples; do NOT return early
+        # Step 4 — gyro bias calibration (collect samples; do NOT return early
         # so the step buffer keeps filling and steps can be counted immediately)
         if not self.bias_calibrated:
-            self.bias_samples.append(gy)
+            self.bias_samples.append(gz)
             if len(self.bias_samples) >= self.BIAS_WINDOW:
                 self.bias_gz = sum(self.bias_samples) / len(self.bias_samples)
                 self.bias_calibrated = True
             # Continue — heading updates with bias_gz=0 until calibration
             # completes (slightly wrong heading for first ~2 s, acceptable)
 
-        # Step 5 — heading integration with dead zone.
-        # Sign: positive gy = turning LEFT (right-hand rule, Y up).
-        # In floor-plan coords (y-down screen), turning RIGHT → heading increases.
-        # So negate gy: heading -= gy_filtered * dt.
-        gy_to_int = self.gy_filt if abs(self.gy_filt) > self.GYRO_DEAD_ZONE else 0.0
-        self.heading -= gy_to_int * dt
+        # Step 5 — heading integration with dead zone
+        gz_to_int = self.gz_filt if abs(self.gz_filt) > self.GYRO_DEAD_ZONE else 0.0
+        self.heading += gz_to_int * dt
 
         # Step 6 — rolling step buffer (use EMA-filtered magnitude, not raw,
         # to eliminate high-frequency noise spikes that cause false detections)
@@ -164,10 +133,4 @@ class PDREngine:
             "heading_deg":     round(degrees(self.heading) % 360, 2),
             "step_count":      self.step_count,
             "bias_calibrated": self.bias_calibrated,
-            # Diagnostic: watch these in the WebSocket stream while physically
-            # turning the tag. The axis that swings large (±0.5–2.0 rad/s)
-            # during a turn is the correct yaw axis.
-            "dbg_gx":          self.dbg_gx,
-            "dbg_gy":          self.dbg_gy,
-            "dbg_gz":          self.dbg_gz,
         }
