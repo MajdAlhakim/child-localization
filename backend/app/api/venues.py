@@ -208,7 +208,7 @@ async def create_floor_plan(
     vid: uuid.UUID,
     name: str = Form(default="Floor 1"),
     floor_number: int = Form(default=1),
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     x_api_key: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -217,19 +217,19 @@ async def create_floor_plan(
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
 
-    content_type = file.content_type or ""
-    if content_type not in ("image/jpeg", "image/png", "image/jpg", "image/svg+xml"):
-        raise HTTPException(status_code=415, detail="Only JPEG, PNG or SVG accepted")
-
     fp = FloorPlan(venue_id=vid, name=name, floor_number=floor_number)
     db.add(fp)
     await db.flush()   # get fp.id before writing file
 
-    img_dir = _UPLOAD_DIR / str(fp.id)
-    img_dir.mkdir(parents=True, exist_ok=True)
-    img_path = img_dir / "image"
-    img_path.write_bytes(await file.read())
-    fp.image_path = str(img_path)
+    if file and file.filename:
+        content_type = file.content_type or ""
+        if content_type not in ("image/jpeg", "image/png", "image/jpg", "image/svg+xml"):
+            raise HTTPException(status_code=415, detail="Only JPEG, PNG or SVG accepted")
+        img_dir = _UPLOAD_DIR / str(fp.id)
+        img_dir.mkdir(parents=True, exist_ok=True)
+        img_path = img_dir / "image"
+        img_path.write_bytes(await file.read())
+        fp.image_path = str(img_path)
 
     await db.commit()
     await db.refresh(fp)
