@@ -80,10 +80,11 @@ class WifiAP(BaseModel):
 
 
 class GatewayPacket(BaseModel):
-    mac:  str
-    ts:   int                        # device milliseconds since boot
-    imu:  list[ImuSample] = Field(default_factory=list)
-    wifi: list[WifiAP]   = Field(default_factory=list)
+    mac:   str
+    ts:    int                        # device milliseconds since boot
+    imu:   list[ImuSample] = Field(default_factory=list)
+    wifi:  list[WifiAP]   = Field(default_factory=list)
+    floor: int | None = None          # barometer floor estimate from firmware (-1/0/1/2)
 
 
 # ── AP cache helper ───────────────────────────────────────────────────────────
@@ -191,6 +192,21 @@ async def receive_packet(
                     "  Floor: floor_plan_id=%s floor_number=%d (votes=%s)",
                     best_fp_id, state.active_floor_number, floor_votes,
                 )
+
+    # ── Barometer floor override (more authoritative than BSSID majority vote) ─
+    # When the firmware sends "floor": <int>, apply it directly.
+    # Also update active_floor_plan_id by finding a floor plan with matching
+    # floor_number in the AP cache (uses the same venue's floor plans).
+    if packet.floor is not None:
+        state.active_floor_number = packet.floor
+        for entry in _ap_cache:
+            if entry["floor_number"] == packet.floor:
+                state.active_floor_plan_id = entry["floor_plan_id"]
+                break
+        logger.info(
+            "  Barometer floor override: floor_number=%d floor_plan_id=%s",
+            state.active_floor_number, state.active_floor_plan_id,
+        )
 
     # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
     # This corrects PDR drift every ~10 s (Beetle scan interval).
