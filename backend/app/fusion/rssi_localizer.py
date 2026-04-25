@@ -4,19 +4,20 @@ backend/app/fusion/rssi_localizer.py
 RSSI-based position estimator.
 
 Pipeline:
-  1. Adaptive Kalman-smooth RSSI per AP prefix: Q rises to 6.0 when residual > 5 dBm
-     (moving) and drops to 1.0 when stable — fast reaction + noise suppression.
-  2. Log-distance path loss → distance estimate, clamped [0.3, 80] m.
-  3. Sort by (distance asc, rssi desc) — prefer close AND strong.
-  4. Reject outliers > 2σ from mean distance; limit to top-5 anchors.
-  5. Snap directly to an AP when its estimated distance < 2 m (fast bootstrap).
-  6. ≥3 anchors → Gauss-Newton nonlinear multilateration; bounds-check result;
-       fall back to weighted centroid (top-3) if it diverges.
-     2 anchors  → weighted centroid.
-     1 anchor   → that AP's position.
-  7. Drop result when avg_rssi_error > 10 dB (unreliable scan).
-  8. Adaptive EMA smoothing: α=0.85 when movement > 2 m, α=0.5 when stationary.
-     State stored in kalman_states["__pos__"] (per-device, no extra argument needed).
+  1. Adaptive Kalman per AP: Q=3.0 on residual >10 dBm (moving), Q=1.0 stable.
+     R raised to 12.0 for stronger noise suppression of stationary RSSI jitter.
+  2. Drop anchors with raw RSSI < -80 dBm (too weak to be reliable).
+  3. Log-distance path loss → distance, clamped [0.3, 80] m.
+  4. Sort by (distance asc, rssi desc); reject outliers > 2σ; top-5 only.
+  5. Drop scan when avg_rssi_error > 20 dBm (very unreliable).
+  6. Snap to AP only when distance < 0.5 m (effectively disabled — prevents false snaps).
+  7. ≥3 anchors → Gauss-Newton; fall back to centroid (top-3) if diverges.
+     2 anchors → centroid.  1 anchor → that AP's coordinates.
+  8. Three-zone adaptive EMA:
+       movement < 1 m  → α=0.15  (stationary — very sticky)
+       movement 1–4 m  → α=0.60  (walking)
+       movement > 4 m  → α=0.80  (fast) + capped at 4 m/scan
+     State stored in kalman_states["__pos__"].
   9. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
 """
 
@@ -30,18 +31,21 @@ from dataclasses import dataclass
 class KalmanState:
     x: float          # estimated RSSI (dBm)
     p: float = 10.0   # error covariance (start uncertain)
-    R: float = 9.0    # measurement noise — empirical indoor std ≈ 3 dBm
+    R: float = 12.0   # measurement noise — raised to suppress stationary jitter
 
     def update(self, z: float) -> float:
-        """Adaptive Kalman: raise Q when RSSI jumps (moving), lower when stable.
-        Threshold is 10 dBm — normal stationary indoor fluctuation is 3-8 dBm."""
+        """Adaptive Q: 3.0 on residual > 10 dBm (real movement), 1.0 when stable."""
         residual = abs(z - self.x)
-        q = 4.0 if residual > 10.0 else 1.5
+        q = 3.0 if residual > 10.0 else 1.0
         p_pred = self.p + q
         k = p_pred / (p_pred + self.R)
         self.x = self.x + k * (z - self.x)
         self.p = (1.0 - k) * p_pred
         return self.x
+
+
+_MAX_JUMP_M     = 4.0   # hard cap on position change per scan (metres)
+_MIN_RSSI_DBM   = -80.0 # drop anchors weaker than this — too noisy to help
 
 
 # ── Distance estimation ───────────────────────────────────────────────────────
@@ -76,11 +80,7 @@ def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
 
 
 def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
-    """
-    Gauss-Newton nonlinear multilateration (up to 10 iterations, weighted).
-    Initialises at the centroid; iterates x -= (JᵀWJ)⁻¹ Jᵀ W r.
-    Returns None only if the Hessian is singular.
-    """
+    """Gauss-Newton nonlinear multilateration (up to 10 iterations, weighted)."""
     x = sum(ap["x"] for ap, _ in anchors) / len(anchors)
     y = sum(ap["y"] for ap, _ in anchors) / len(anchors)
 
@@ -148,12 +148,12 @@ def localize(
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
-    # ── Adaptive Kalman-smooth RSSI and estimate distances ────────────────────
+    # ── Kalman-smooth RSSI; skip weak anchors ─────────────────────────────────
     anchors: list[tuple[dict, float]] = []
     for prefix, ap in known_by_prefix.items():
-        if prefix not in scan_by_prefix:
+        raw_rssi = scan_by_prefix.get(prefix)
+        if raw_rssi is None or raw_rssi < _MIN_RSSI_DBM:
             continue
-        raw_rssi = scan_by_prefix[prefix]
         if prefix not in kalman_states:
             kalman_states[prefix] = KalmanState(x=raw_rssi)
         smoothed = kalman_states[prefix].update(raw_rssi)
@@ -184,15 +184,13 @@ def localize(
         for ap, dist in anchors
     ) / len(anchors)
 
-    # ── Drop unreliable scan ──────────────────────────────────────────────────
-    # Threshold is 15 dBm — 10 is too tight for typical indoor multipath.
-    if avg_error > 15.0:
+    # Drop truly unreliable scans (20 dBm is generous — only rejects garbage)
+    if avg_error > 20.0:
         return None
 
-    # ── Fast bootstrap: snap when clearly next to one AP (dist < 1 m) ────────
-    # 1 m threshold avoids false snaps — log-distance error is often 50-100%.
+    # ── Fast bootstrap: snap only when unmistakably next to an AP (< 0.5 m) ──
     strongest = max(anchors, key=lambda a: scan_by_prefix[_prefix(a[0]["bssid"])])
-    if strongest[1] < 1.0:
+    if strongest[1] < 0.5:
         ap = strongest[0]
         x, y = ap["x"], ap["y"]
         last = kalman_states.get("__pos__")
@@ -216,14 +214,30 @@ def localize(
         else:
             x, y = _weighted_centroid(anchors[:3])
 
-    # ── Adaptive temporal smoothing ───────────────────────────────────────────
+    # ── Three-zone adaptive EMA with hard jump cap ────────────────────────────
     last = kalman_states.get("__pos__")
     if last is not None:
-        movement = math.sqrt((x - last[0]) ** 2 + (y - last[1]) ** 2)
-        # 3 m movement threshold avoids treating position noise as real motion.
-        alpha = 0.8 if movement > 3.0 else 0.55
+        dx  = x - last[0]
+        dy  = y - last[1]
+        movement = math.sqrt(dx * dx + dy * dy)
+
+        # Cap position jump to _MAX_JUMP_M per scan to prevent corridor snaps
+        if movement > _MAX_JUMP_M:
+            scale = _MAX_JUMP_M / movement
+            x = last[0] + dx * scale
+            y = last[1] + dy * scale
+            movement = _MAX_JUMP_M
+
+        if movement < 1.0:
+            alpha = 0.15   # stationary — very sticky, absorbs RSSI noise
+        elif movement < 4.0:
+            alpha = 0.60   # walking
+        else:
+            alpha = 0.80   # fast movement (after cap, this only fires at exactly 4 m)
+
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
+
     kalman_states["__pos__"] = (x, y)
 
     return {
