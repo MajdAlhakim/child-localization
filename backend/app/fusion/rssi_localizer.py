@@ -4,14 +4,16 @@ backend/app/fusion/rssi_localizer.py
 RSSI-based position estimator — Python port of LocalizationEngine.kt.
 
 Pipeline:
-  1. Kalman-smooth RSSI per AP (Q=2.0, R=9.0) to suppress measurement jitter.
-  2. Log-distance path loss → distance estimate per AP, clamped [0.3, 80] m.
-  3. Sort anchors by ascending distance (nearest first = best WRLS reference row).
-  4. ≥3 anchors → WRLS multilateration; validate with bounds check;
-       fall back to weighted centroid (top-3) if LS diverges.
+  1. Kalman-smooth RSSI per AP prefix (Q=2.0, R=9.0).
+  2. Log-distance path loss → distance estimate, clamped [0.3, 80] m.
+  3. Sort anchors nearest-first; reject outliers (> 2σ from mean distance).
+  4. Limit to top-5 anchors (more anchors ≠ better — bad geometry degrades solver).
+  5. ≥3 anchors → Gauss-Newton nonlinear multilateration; bounds-check result;
+       fall back to weighted centroid (top-3) if it diverges.
      2 anchors  → weighted centroid.
      1 anchor   → return that AP's position directly.
-  5. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
+  6. Temporally smooth the output (α = 0.6, stored in kalman_states["__pos__"]).
+  7. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
 """
 
 import math
@@ -36,13 +38,13 @@ class KalmanState:
         return self.x
 
 
+_SMOOTHING_ALPHA = 0.6   # temporal EMA weight for final position
+
+
 # ── Distance estimation ───────────────────────────────────────────────────────
 
 def estimate_distance(rssi_ref: float, path_loss_n: float, rssi_smoothed: float) -> float:
-    """
-    Log-distance path loss: dist = 10^((rssi_ref − rssi) / (10·n)).
-    Clamped to [0.3 m, 80 m] — below 0.3 is physically unrealistic indoors.
-    """
+    """Log-distance: dist = 10^((rssi_ref − rssi) / (10·n)), clamped [0.3, 80] m."""
     exponent = (rssi_ref - rssi_smoothed) / (10.0 * path_loss_n)
     return max(0.3, min(80.0, 10.0 ** exponent))
 
@@ -50,7 +52,7 @@ def estimate_distance(rssi_ref: float, path_loss_n: float, rssi_smoothed: float)
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
 def _weighted_centroid(anchors: list) -> tuple[float, float]:
-    """Weight = 1/(dist + 0.5) to avoid div/0. Linear (not squared) to avoid pull effect."""
+    """w = 1/(dist + 0.5) — linear weighting avoids the AP-pull effect."""
     weights = [1.0 / (d + 0.5) for _, d in anchors]
     w_sum = sum(weights)
     x = sum(w * ap["x"] for (ap, _), w in zip(anchors, weights)) / w_sum
@@ -59,12 +61,12 @@ def _weighted_centroid(anchors: list) -> tuple[float, float]:
 
 
 def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
-    """Reject WRLS result if it falls more than 30% outside the AP cluster bounding box."""
+    """Reject result if it falls > 30% outside the AP cluster bounding box."""
     min_x = min(ap["x"] for ap, _ in anchors)
     max_x = max(ap["x"] for ap, _ in anchors)
     min_y = min(ap["y"] for ap, _ in anchors)
     max_y = max(ap["y"] for ap, _ in anchors)
-    mx = max(max_x - min_x, 5.0) * 0.30 + 2.0   # 30% margin + 2m absolute minimum
+    mx = max(max_x - min_x, 5.0) * 0.30 + 2.0
     my = max(max_y - min_y, 5.0) * 0.30 + 2.0
     return ((min_x - mx) <= pos[0] <= (max_x + mx) and
             (min_y - my) <= pos[1] <= (max_y + my))
@@ -72,66 +74,77 @@ def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
 
 def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
     """
-    Weighted least-squares multilateration (WRLS).
+    Gauss-Newton nonlinear multilateration (up to 10 iterations, weighted).
 
-    Classic linearisation: subtract anchor-0 from all rows to eliminate X²+Y² terms,
-    giving a linear system Ax = b. Rows are weighted by w_i = 1/(dist_i + 0.5)
-    so closer APs have more influence.
+    Initialises at the centroid of anchor positions and iterates:
+        x_(k+1) = x_k − (JᵀWJ)⁻¹ Jᵀ W r
+    where J is the Jacobian of Euclidean distances, W = diag(1/(d+0.5)),
+    and r = dist(x_k, AP_i) − d_i.
 
-    Solves the 2×2 normal equations: (WA)ᵀ(WA) x = (WA)ᵀ(Wb).
-    Returns None if the matrix is (near-)singular.
+    Returns None only if the Hessian is singular at the first step.
     """
-    ap0, d0 = anchors[0]
-    x0, y0 = ap0["x"], ap0["y"]
+    x = sum(ap["x"] for ap, _ in anchors) / len(anchors)
+    y = sum(ap["y"] for ap, _ in anchors) / len(anchors)
 
-    rows: list[tuple[float, float, float]] = []
-    for ap, di in anchors[1:]:
-        w  = 1.0 / (di + 0.5)
-        a  = 2.0 * (ap["x"] - x0)
-        b  = 2.0 * (ap["y"] - y0)
-        c  = di*di - d0*d0 - ap["x"]**2 + x0**2 - ap["y"]**2 + y0**2
-        rows.append((w * a, w * b, w * c))
+    for _ in range(10):
+        jtj00 = jtj01 = jtj11 = 0.0
+        jtr0  = jtr1  = 0.0
 
-    ata00 = ata01 = ata11 = atb0 = atb1 = 0.0
-    for wa, wb, wc in rows:
-        ata00 += wa * wa
-        ata01 += wa * wb
-        ata11 += wb * wb
-        atb0  += wa * wc
-        atb1  += wb * wc
+        for ap, d in anchors:
+            dx   = x - ap["x"]
+            dy   = y - ap["y"]
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist < 1e-6:
+                dist = 1e-6
+            w    = 1.0 / (d + 0.5)
+            jx   = dx / dist
+            jy   = dy / dist
+            res  = dist - d
 
-    det = ata00 * ata11 - ata01 * ata01
-    if abs(det) < 1e-8:
-        return None   # singular — collinear APs or duplicates
+            jtj00 += w * jx * jx
+            jtj01 += w * jx * jy
+            jtj11 += w * jy * jy
+            jtr0  += w * jx * res
+            jtr1  += w * jy * res
 
-    x = (ata11 * atb0 - ata01 * atb1) / det
-    y = (ata00 * atb1 - ata01 * atb0) / det
+        det = jtj00 * jtj11 - jtj01 * jtj01
+        if abs(det) < 1e-8:
+            return None
+
+        dx_upd = (jtj11 * jtr0 - jtj01 * jtr1) / det
+        dy_upd = (jtj00 * jtr1 - jtj01 * jtr0) / det
+        x -= dx_upd
+        y -= dy_upd
+
+        if math.sqrt(dx_upd * dx_upd + dy_upd * dy_upd) < 1e-3:
+            break
+
     return x, y
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def _prefix(bssid: str) -> str:
-    """First 5 octets of a BSSID — identifies a physical AP across its virtual SSIDs."""
+    """First 5 octets — identifies a physical radio across its virtual SSIDs."""
     return bssid.lower().rsplit(":", 1)[0]
 
 
 def localize(
     scan: list[dict],       # [{"bssid": str, "rssi": int|float}, ...]
     known_aps: list[dict],  # [{"bssid", "rssi_ref", "path_loss_n", "x", "y"}, ...]
-    kalman_states: dict,    # {prefix → KalmanState}; mutated in place
+    kalman_states: dict,    # {prefix → KalmanState, "__pos__" → (x,y)}; mutated in place
 ) -> dict | None:
     """
     Estimate device position from a Wi-Fi scan.
 
-    BSSIDs are grouped by first 5 octets (physical AP). Multiple virtual SSIDs
-    from the same radio collapse to the strongest RSSI observation.
-
-    Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None if no APs match.
+    BSSIDs are collapsed by first 5 octets (physical AP); strongest RSSI wins.
+    Temporal smoothing state is stored in kalman_states["__pos__"] alongside
+    the per-AP Kalman states so no additional argument is needed.
     """
+    # ── Collapse by physical AP prefix ───────────────────────────────────────
     scan_by_prefix: dict[str, float] = {}
     for entry in scan:
-        p = _prefix(entry["bssid"])
+        p    = _prefix(entry["bssid"])
         rssi = float(entry["rssi"])
         if p not in scan_by_prefix or rssi > scan_by_prefix[p]:
             scan_by_prefix[p] = rssi
@@ -140,6 +153,7 @@ def localize(
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
+    # ── Kalman-smooth RSSI and estimate distances ─────────────────────────────
     anchors: list[tuple[dict, float]] = []
     for prefix, ap in known_by_prefix.items():
         if prefix not in scan_by_prefix:
@@ -154,20 +168,31 @@ def localize(
     if not anchors:
         return None
 
-    # Step 2: sort nearest-first (best WRLS linearisation row first)
+    # ── Sort nearest-first ────────────────────────────────────────────────────
     anchors.sort(key=lambda t: t[1])
 
-    # Step 3: average |observed − model| RSSI as a quality metric
+    # ── Outlier rejection (> 2σ from mean distance) ───────────────────────────
+    if len(anchors) > 3:
+        mean = sum(d for _, d in anchors) / len(anchors)
+        std  = math.sqrt(sum((d - mean) ** 2 for _, d in anchors) / len(anchors))
+        filtered = [a for a in anchors if abs(a[1] - mean) <= 2.0 * std]
+        if filtered:          # keep originals if all were rejected (shouldn't happen)
+            anchors = filtered
+
+    # ── Limit to top-5 strongest (nearest) anchors ───────────────────────────
+    anchors = anchors[:5]
+
+    # ── Quality metric ────────────────────────────────────────────────────────
     avg_error = sum(
         abs(scan_by_prefix[_prefix(ap["bssid"])] -
             (ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(max(dist, 0.001))))
         for ap, dist in anchors
     ) / len(anchors)
 
-    # Step 4: position estimate
+    # ── Position estimate ─────────────────────────────────────────────────────
     if len(anchors) == 1:
         ap, _ = anchors[0]
-        x, y = ap["x"], ap["y"]
+        x, y  = ap["x"], ap["y"]
     elif len(anchors) == 2:
         x, y = _weighted_centroid(anchors)
     else:
@@ -175,8 +200,14 @@ def localize(
         if ls is not None and _is_within_bounds(ls, anchors):
             x, y = ls
         else:
-            # LS diverged — fall back to centroid using top-3 nearest anchors
             x, y = _weighted_centroid(anchors[:3])
+
+    # ── Temporal smoothing (EMA per device, stored in kalman_states) ──────────
+    last = kalman_states.get("__pos__")
+    if last is not None:
+        x = _SMOOTHING_ALPHA * x + (1.0 - _SMOOTHING_ALPHA) * last[0]
+        y = _SMOOTHING_ALPHA * y + (1.0 - _SMOOTHING_ALPHA) * last[1]
+    kalman_states["__pos__"] = (x, y)
 
     return {
         "x":              round(x, 3),
