@@ -33,9 +33,10 @@ class KalmanState:
     R: float = 9.0    # measurement noise — empirical indoor std ≈ 3 dBm
 
     def update(self, z: float) -> float:
-        """Adaptive Kalman: raise Q when RSSI jumps (moving), lower when stable."""
+        """Adaptive Kalman: raise Q when RSSI jumps (moving), lower when stable.
+        Threshold is 10 dBm — normal stationary indoor fluctuation is 3-8 dBm."""
         residual = abs(z - self.x)
-        q = 6.0 if residual > 5.0 else 1.0   # fast adapt vs. noise suppress
+        q = 4.0 if residual > 10.0 else 1.5
         p_pred = self.p + q
         k = p_pred / (p_pred + self.R)
         self.x = self.x + k * (z - self.x)
@@ -184,12 +185,14 @@ def localize(
     ) / len(anchors)
 
     # ── Drop unreliable scan ──────────────────────────────────────────────────
-    if avg_error > 10.0:
+    # Threshold is 15 dBm — 10 is too tight for typical indoor multipath.
+    if avg_error > 15.0:
         return None
 
-    # ── Fast bootstrap: snap when clearly next to one AP (dist < 2 m) ────────
+    # ── Fast bootstrap: snap when clearly next to one AP (dist < 1 m) ────────
+    # 1 m threshold avoids false snaps — log-distance error is often 50-100%.
     strongest = max(anchors, key=lambda a: scan_by_prefix[_prefix(a[0]["bssid"])])
-    if strongest[1] < 2.0:
+    if strongest[1] < 1.0:
         ap = strongest[0]
         x, y = ap["x"], ap["y"]
         last = kalman_states.get("__pos__")
@@ -217,7 +220,8 @@ def localize(
     last = kalman_states.get("__pos__")
     if last is not None:
         movement = math.sqrt((x - last[0]) ** 2 + (y - last[1]) ** 2)
-        alpha = 0.85 if movement > 2.0 else 0.5
+        # 3 m movement threshold avoids treating position noise as real motion.
+        alpha = 0.8 if movement > 3.0 else 0.55
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
     kalman_states["__pos__"] = (x, y)
