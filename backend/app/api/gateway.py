@@ -171,6 +171,7 @@ async def receive_packet(
             scan = [{"bssid": ap.bssid, "rssi": ap.rssi} for ap in wifi]
             rssi_result = rssi_localize(scan, _ap_cache, state.kalman_states)
             if rssi_result:
+                state.last_rssi_result = rssi_result   # cache for heartbeat broadcasts
                 logger.info(
                     "  RSSI: x=%.2f y=%.2f anchors=%d err=%.1f dB",
                     rssi_result["x"], rssi_result["y"],
@@ -224,9 +225,15 @@ async def receive_packet(
             mapped_floor, state.active_floor_plan_id,
         )
 
+    # Use fresh RSSI result from this packet, or fall back to last cached result
+    # so the broadcast fires on every packet (heartbeat at ~5 Hz) rather than
+    # only on the ~5 s Wi-Fi scan interval.
+    effective_rssi = rssi_result or state.last_rssi_result
+
     # ── Anchor PDR dead-reckoning to RSSI absolute position ──────────────────
     # PDR accumulates heading + step count; RSSI corrects absolute x,y every ~5 s.
     # This is the fusion step: RSSI dominates position, PDR dominates heading.
+    # Only anchor on a fresh scan (rssi_result), not the cached fallback.
     if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
         state.pdr.x = rssi_result["x"]
         state.pdr.y = rssi_result["y"]
@@ -262,14 +269,15 @@ async def receive_packet(
             pdr_result.get("heading_deg", 0.0),
         )
 
-    # ── Broadcast fused position when RSSI scan arrives ──────────────────────
-    # Position (x, y) comes from RSSI; heading and step count come from PDR.
-    # Broadcast is triggered by each Wi-Fi scan (~5 s interval from Beetle scanner).
-    if rssi_result:
-        confidence = min(1.0, rssi_result["anchor_count"] / 5.0)
+    # ── Broadcast fused position on every packet ─────────────────────────────
+    # Position (x, y) from RSSI; heading and step count from PDR.
+    # Uses effective_rssi (fresh scan or last cached) so broadcasts fire at the
+    # full packet rate (~5 Hz) rather than only on the 5 s scan interval.
+    if effective_rssi:
+        confidence = min(1.0, effective_rssi["anchor_count"] / 5.0)
         msg = {
-            "x":              rssi_result["x"],
-            "y":              rssi_result["y"],
+            "x":              effective_rssi["x"],
+            "y":              effective_rssi["y"],
             "heading":        pdr_result.get("heading", 0.0)       if pdr_result else 0.0,
             "heading_deg":    pdr_result.get("heading_deg", 0.0)   if pdr_result else 0.0,
             "step_count":     pdr_result.get("step_count", 0)      if pdr_result else 0,
@@ -278,8 +286,8 @@ async def receive_packet(
             "mode":           "fused",
             "confidence":     confidence,
             "tag_id":         tag_id,
-            "rssi_anchors":   rssi_result["anchor_count"],
-            "rssi_error":     rssi_result["avg_rssi_error"],
+            "rssi_anchors":   effective_rssi["anchor_count"],
+            "rssi_error":     effective_rssi["avg_rssi_error"],
             "floor_plan_id":  state.active_floor_plan_id,
             "floor_number":   state.active_floor_number,
         }
@@ -292,12 +300,12 @@ async def receive_packet(
         "imu_samples": len(imu),
         "wifi_aps":    len(wifi),
         "position": {
-            "x":              rssi_result["x"]                          if rssi_result else 0.0,
-            "y":              rssi_result["y"]                          if rssi_result else 0.0,
+            "x":              effective_rssi["x"]                       if effective_rssi else 0.0,
+            "y":              effective_rssi["y"]                       if effective_rssi else 0.0,
             "heading":        pdr_result.get("heading", 0.0)           if pdr_result else 0.0,
             "heading_deg":    pdr_result.get("heading_deg", 0.0)       if pdr_result else 0.0,
             "step_count":     pdr_result.get("step_count", 0)          if pdr_result else 0,
-            "bias_calibrated": bool(rssi_result),
+            "bias_calibrated": bool(effective_rssi),
         },
         "rssi": rssi_result,
     }

@@ -232,12 +232,12 @@ def localize(
             y = last[1] + dy * scale
             movement = _MAX_JUMP_M
 
-        if movement < 1.0:
-            alpha = 0.15   # stationary — very sticky, absorbs RSSI noise
+        if movement < 0.5:
+            alpha = 0.30   # stationary — absorbs jitter while staying responsive
         elif movement < 4.0:
-            alpha = 0.60   # walking
+            alpha = 0.75   # walking
         else:
-            alpha = 0.80   # fast movement (after cap, this only fires at exactly 4 m)
+            alpha = 0.95   # fast movement (after cap, this only fires at exactly 4 m)
 
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]

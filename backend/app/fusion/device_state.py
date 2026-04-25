@@ -27,3 +27,8 @@ class DeviceState:
     # None until the first scan with at least one known AP arrives.
     active_floor_plan_id: str | None = None
     active_floor_number: int | None = None
+
+    # Last successful RSSI localization result — re-broadcast on every packet
+    # so the app receives position updates at the packet rate (~5 Hz) rather
+    # than only on the ~5 s Wi-Fi scan interval.
+    last_rssi_result: dict | None = None
