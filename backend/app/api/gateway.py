@@ -200,14 +200,28 @@ async def receive_packet(
     if packet.floor is not None:
         if not wifi:
             await _refresh_ap_cache_if_stale(db)
-        state.active_floor_number = packet.floor
+
+        # Map firmware floor index to DB floor_number.
+        # Firmware is 0-indexed (ground=0, 1st above=1, …).
+        # DB floor_number is whatever the user assigned in the web tool (e.g. 1,2).
+        # Offset = min DB floor_number so firmware-0 always aligns with the
+        # lowest floor in the database, regardless of user-chosen numbering.
+        db_floor_numbers = sorted({e["floor_number"] for e in _ap_cache}) if _ap_cache else []
+        if db_floor_numbers:
+            offset = db_floor_numbers[0]          # e.g. 1 if floors are [1,2]
+            mapped_floor = packet.floor + offset
+        else:
+            mapped_floor = packet.floor           # no AP data yet, use raw value
+
+        state.active_floor_number = mapped_floor
         for entry in _ap_cache:
-            if entry["floor_number"] == packet.floor:
+            if entry["floor_number"] == mapped_floor:
                 state.active_floor_plan_id = entry["floor_plan_id"]
                 break
         logger.info(
-            "  Floor (barometer): floor_number=%d floor_plan_id=%s",
-            state.active_floor_number, state.active_floor_plan_id,
+            "  Floor (barometer): firmware=%d offset=%d mapped=%d floor_plan_id=%s",
+            packet.floor, offset if db_floor_numbers else 0,
+            mapped_floor, state.active_floor_plan_id,
         )
 
     # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
