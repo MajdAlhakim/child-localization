@@ -1,44 +1,46 @@
 """
 backend/app/fusion/rssi_localizer.py
 
-RSSI-based position estimator — Python port of LocalizationEngine.kt.
+RSSI-based position estimator.
 
 Pipeline:
-  1. Kalman-smooth RSSI per AP prefix (Q=2.0, R=9.0).
+  1. Adaptive Kalman-smooth RSSI per AP prefix: Q rises to 6.0 when residual > 5 dBm
+     (moving) and drops to 1.0 when stable — fast reaction + noise suppression.
   2. Log-distance path loss → distance estimate, clamped [0.3, 80] m.
-  3. Sort anchors nearest-first; reject outliers (> 2σ from mean distance).
-  4. Limit to top-5 anchors (more anchors ≠ better — bad geometry degrades solver).
-  5. ≥3 anchors → Gauss-Newton nonlinear multilateration; bounds-check result;
+  3. Sort by (distance asc, rssi desc) — prefer close AND strong.
+  4. Reject outliers > 2σ from mean distance; limit to top-5 anchors.
+  5. Snap directly to an AP when its estimated distance < 2 m (fast bootstrap).
+  6. ≥3 anchors → Gauss-Newton nonlinear multilateration; bounds-check result;
        fall back to weighted centroid (top-3) if it diverges.
      2 anchors  → weighted centroid.
-     1 anchor   → return that AP's position directly.
-  6. Temporally smooth the output (α = 0.6, stored in kalman_states["__pos__"]).
-  7. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
+     1 anchor   → that AP's position.
+  7. Drop result when avg_rssi_error > 10 dB (unreliable scan).
+  8. Adaptive EMA smoothing: α=0.85 when movement > 2 m, α=0.5 when stationary.
+     State stored in kalman_states["__pos__"] (per-device, no extra argument needed).
+  9. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
-# ── Per-AP Kalman smoother ────────────────────────────────────────────────────
+# ── Per-AP adaptive Kalman smoother ──────────────────────────────────────────
 
 @dataclass
 class KalmanState:
     x: float          # estimated RSSI (dBm)
     p: float = 10.0   # error covariance (start uncertain)
-    Q: float = 2.0    # process noise — RSSI can drift ~√2 dBm per step
     R: float = 9.0    # measurement noise — empirical indoor std ≈ 3 dBm
 
     def update(self, z: float) -> float:
-        """Kalman predict + update. Returns the smoothed RSSI estimate."""
-        p_pred = self.p + self.Q
+        """Adaptive Kalman: raise Q when RSSI jumps (moving), lower when stable."""
+        residual = abs(z - self.x)
+        q = 6.0 if residual > 5.0 else 1.0   # fast adapt vs. noise suppress
+        p_pred = self.p + q
         k = p_pred / (p_pred + self.R)
         self.x = self.x + k * (z - self.x)
         self.p = (1.0 - k) * p_pred
         return self.x
-
-
-_SMOOTHING_ALPHA = 0.6   # temporal EMA weight for final position
 
 
 # ── Distance estimation ───────────────────────────────────────────────────────
@@ -75,13 +77,8 @@ def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
 def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
     """
     Gauss-Newton nonlinear multilateration (up to 10 iterations, weighted).
-
-    Initialises at the centroid of anchor positions and iterates:
-        x_(k+1) = x_k − (JᵀWJ)⁻¹ Jᵀ W r
-    where J is the Jacobian of Euclidean distances, W = diag(1/(d+0.5)),
-    and r = dist(x_k, AP_i) − d_i.
-
-    Returns None only if the Hessian is singular at the first step.
+    Initialises at the centroid; iterates x -= (JᵀWJ)⁻¹ Jᵀ W r.
+    Returns None only if the Hessian is singular.
     """
     x = sum(ap["x"] for ap, _ in anchors) / len(anchors)
     y = sum(ap["y"] for ap, _ in anchors) / len(anchors)
@@ -136,10 +133,7 @@ def localize(
 ) -> dict | None:
     """
     Estimate device position from a Wi-Fi scan.
-
-    BSSIDs are collapsed by first 5 octets (physical AP); strongest RSSI wins.
-    Temporal smoothing state is stored in kalman_states["__pos__"] alongside
-    the per-AP Kalman states so no additional argument is needed.
+    BSSIDs collapsed by first 5 octets; strongest RSSI per physical AP wins.
     """
     # ── Collapse by physical AP prefix ───────────────────────────────────────
     scan_by_prefix: dict[str, float] = {}
@@ -153,7 +147,7 @@ def localize(
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
-    # ── Kalman-smooth RSSI and estimate distances ─────────────────────────────
+    # ── Adaptive Kalman-smooth RSSI and estimate distances ────────────────────
     anchors: list[tuple[dict, float]] = []
     for prefix, ap in known_by_prefix.items():
         if prefix not in scan_by_prefix:
@@ -168,18 +162,18 @@ def localize(
     if not anchors:
         return None
 
-    # ── Sort nearest-first ────────────────────────────────────────────────────
-    anchors.sort(key=lambda t: t[1])
+    # ── Sort: nearest first; break ties by strongest raw RSSI ────────────────
+    anchors.sort(key=lambda t: (t[1], -scan_by_prefix[_prefix(t[0]["bssid"])]))
 
     # ── Outlier rejection (> 2σ from mean distance) ───────────────────────────
     if len(anchors) > 3:
         mean = sum(d for _, d in anchors) / len(anchors)
         std  = math.sqrt(sum((d - mean) ** 2 for _, d in anchors) / len(anchors))
         filtered = [a for a in anchors if abs(a[1] - mean) <= 2.0 * std]
-        if filtered:          # keep originals if all were rejected (shouldn't happen)
+        if filtered:
             anchors = filtered
 
-    # ── Limit to top-5 strongest (nearest) anchors ───────────────────────────
+    # ── Limit to top-5 ───────────────────────────────────────────────────────
     anchors = anchors[:5]
 
     # ── Quality metric ────────────────────────────────────────────────────────
@@ -188,6 +182,23 @@ def localize(
             (ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(max(dist, 0.001))))
         for ap, dist in anchors
     ) / len(anchors)
+
+    # ── Drop unreliable scan ──────────────────────────────────────────────────
+    if avg_error > 10.0:
+        return None
+
+    # ── Fast bootstrap: snap when clearly next to one AP (dist < 2 m) ────────
+    strongest = max(anchors, key=lambda a: scan_by_prefix[_prefix(a[0]["bssid"])])
+    if strongest[1] < 2.0:
+        ap = strongest[0]
+        x, y = ap["x"], ap["y"]
+        last = kalman_states.get("__pos__")
+        if last is not None:
+            x = 0.85 * x + 0.15 * last[0]
+            y = 0.85 * y + 0.15 * last[1]
+        kalman_states["__pos__"] = (x, y)
+        return {"x": round(x, 3), "y": round(y, 3),
+                "anchor_count": len(anchors), "avg_rssi_error": round(avg_error, 2)}
 
     # ── Position estimate ─────────────────────────────────────────────────────
     if len(anchors) == 1:
@@ -202,11 +213,13 @@ def localize(
         else:
             x, y = _weighted_centroid(anchors[:3])
 
-    # ── Temporal smoothing (EMA per device, stored in kalman_states) ──────────
+    # ── Adaptive temporal smoothing ───────────────────────────────────────────
     last = kalman_states.get("__pos__")
     if last is not None:
-        x = _SMOOTHING_ALPHA * x + (1.0 - _SMOOTHING_ALPHA) * last[0]
-        y = _SMOOTHING_ALPHA * y + (1.0 - _SMOOTHING_ALPHA) * last[1]
+        movement = math.sqrt((x - last[0]) ** 2 + (y - last[1]) ** 2)
+        alpha = 0.85 if movement > 2.0 else 0.5
+        x = alpha * x + (1.0 - alpha) * last[0]
+        y = alpha * y + (1.0 - alpha) * last[1]
     kalman_states["__pos__"] = (x, y)
 
     return {
