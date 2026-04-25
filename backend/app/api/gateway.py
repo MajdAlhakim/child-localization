@@ -14,7 +14,7 @@ Packet format:
 
 Fusion pipeline:
   1. Run PDR on each IMU sample (continuous, 5 Hz).
-  2. When Wi-Fi scan arrives (~every 10 s from Beetle scanner):
+  2. When Wi-Fi scan arrives (~every 5 s from Beetle scanner):
        a. Load APs from DB (cached 60 s).
        b. Run RSSI localizer (Kalman smooth + log-distance + WRLS multilateration).
        c. If ≥2 RSSI anchors: anchor PDR position to RSSI (prevents drift accumulation).
@@ -224,8 +224,9 @@ async def receive_packet(
             mapped_floor, state.active_floor_plan_id,
         )
 
-    # ── Anchor PDR to RSSI when enough anchors are visible ───────────────────
-    # This corrects PDR drift every ~10 s (Beetle scan interval).
+    # ── Anchor PDR dead-reckoning to RSSI absolute position ──────────────────
+    # PDR accumulates heading + step count; RSSI corrects absolute x,y every ~5 s.
+    # This is the fusion step: RSSI dominates position, PDR dominates heading.
     if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
         state.pdr.x = rssi_result["x"]
         state.pdr.y = rssi_result["y"]
@@ -233,7 +234,7 @@ async def receive_packet(
             "  PDR anchored to RSSI: (%.2f, %.2f)", rssi_result["x"], rssi_result["y"]
         )
 
-    # ── Run PDR on each IMU sample — broadcast immediately once calibrated ────
+    # ── Run PDR on each IMU sample (accumulates heading + steps) ─────────────
     pdr_result = None
     for sample in imu:
         state.imu_buffer.append({
@@ -252,33 +253,37 @@ async def receive_packet(
             gy    = sample.gy,
             gz    = sample.gz,
         )
-        if pdr_result["bias_calibrated"]:
-            # Determine source and confidence for this broadcast
-            if rssi_result and rssi_result["anchor_count"] >= _MIN_RSSI_ANCHORS:
-                source     = "rssi_anchored"
-                confidence = min(1.0, rssi_result["anchor_count"] / 5.0)
-            else:
-                source     = "pdr_only"
-                confidence = 0.0
 
-            msg = dict(pdr_result)
-            msg["source"]          = source
-            msg["mode"]            = "fused" if source == "rssi_anchored" else "imu_only"
-            msg["confidence"]      = confidence
-            msg["tag_id"]          = tag_id
-            msg["rssi_anchors"]    = rssi_result["anchor_count"]   if rssi_result else None
-            msg["rssi_error"]      = rssi_result["avg_rssi_error"] if rssi_result else None
-            msg["floor_plan_id"]   = state.active_floor_plan_id
-            msg["floor_number"]    = state.active_floor_number
-            await broadcaster.broadcast(tag_id, msg)
-
-    # ── Log PDR output ────────────────────────────────────────────────────────
     if pdr_result:
         logger.info(
-            "  PDR: x=%.2f y=%.2f steps=%d cal=%s",
+            "  PDR: x=%.2f y=%.2f steps=%d cal=%s heading=%.1f°",
             pdr_result["x"], pdr_result["y"],
             pdr_result["step_count"], pdr_result["bias_calibrated"],
+            pdr_result.get("heading_deg", 0.0),
         )
+
+    # ── Broadcast fused position when RSSI scan arrives ──────────────────────
+    # Position (x, y) comes from RSSI; heading and step count come from PDR.
+    # Broadcast is triggered by each Wi-Fi scan (~5 s interval from Beetle scanner).
+    if rssi_result:
+        confidence = min(1.0, rssi_result["anchor_count"] / 5.0)
+        msg = {
+            "x":              rssi_result["x"],
+            "y":              rssi_result["y"],
+            "heading":        pdr_result.get("heading", 0.0)       if pdr_result else 0.0,
+            "heading_deg":    pdr_result.get("heading_deg", 0.0)   if pdr_result else 0.0,
+            "step_count":     pdr_result.get("step_count", 0)      if pdr_result else 0,
+            "bias_calibrated": True,
+            "source":         "fused",
+            "mode":           "fused",
+            "confidence":     confidence,
+            "tag_id":         tag_id,
+            "rssi_anchors":   rssi_result["anchor_count"],
+            "rssi_error":     rssi_result["avg_rssi_error"],
+            "floor_plan_id":  state.active_floor_plan_id,
+            "floor_number":   state.active_floor_number,
+        }
+        await broadcaster.broadcast(tag_id, msg)
 
     # ── Response ──────────────────────────────────────────────────────────────
     return {
@@ -286,10 +291,13 @@ async def receive_packet(
         "mac":         mac,
         "imu_samples": len(imu),
         "wifi_aps":    len(wifi),
-        "position": pdr_result if pdr_result else {
-            "x": 0.0, "y": 0.0, "heading": 0.0,
-            "heading_deg": 0.0, "step_count": 0,
-            "bias_calibrated": False,
+        "position": {
+            "x":              rssi_result["x"]                          if rssi_result else 0.0,
+            "y":              rssi_result["y"]                          if rssi_result else 0.0,
+            "heading":        pdr_result.get("heading", 0.0)           if pdr_result else 0.0,
+            "heading_deg":    pdr_result.get("heading_deg", 0.0)       if pdr_result else 0.0,
+            "step_count":     pdr_result.get("step_count", 0)          if pdr_result else 0,
+            "bias_calibrated": bool(rssi_result),
         },
         "rssi": rssi_result,
     }

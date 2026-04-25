@@ -12,7 +12,7 @@ Pipeline:
   5. Drop scan when avg_rssi_error > 20 dBm (very unreliable).
   6. Snap to AP only when distance < 0.5 m (effectively disabled — prevents false snaps).
   7. ≥3 anchors → Gauss-Newton; fall back to centroid (top-3) if diverges.
-     2 anchors → centroid.  1 anchor → that AP's coordinates.
+     2 anchors → centroid.  1 anchor → None (distance only, no position).
   8. Three-zone adaptive EMA:
        movement < 1 m  → α=0.15  (stationary — very sticky)
        movement 1–4 m  → α=0.60  (walking)
@@ -204,8 +204,7 @@ def localize(
 
     # ── Position estimate ─────────────────────────────────────────────────────
     if len(anchors) == 1:
-        ap, _ = anchors[0]
-        x, y  = ap["x"], ap["y"]
+        return None   # one AP gives only a distance, not a position
     elif len(anchors) == 2:
         x, y = _weighted_centroid(anchors)
     else:
@@ -219,7 +218,7 @@ def localize(
     last    = kalman_states.get("__pos__")
     last_ts = kalman_states.get("__pos_ts__", 0.0)
     now     = time.time()
-    stale   = last is None or (now - last_ts) > 25.0
+    stale   = last is None or (now - last_ts) > 15.0
 
     if not stale:
         dx  = x - last[0]
