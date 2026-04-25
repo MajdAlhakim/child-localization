@@ -22,6 +22,7 @@ Pipeline:
 """
 
 import math
+import time
 from dataclasses import dataclass
 
 
@@ -215,8 +216,12 @@ def localize(
             x, y = _weighted_centroid(anchors[:3])
 
     # ── Three-zone adaptive EMA with hard jump cap ────────────────────────────
-    last = kalman_states.get("__pos__")
-    if last is not None:
+    last    = kalman_states.get("__pos__")
+    last_ts = kalman_states.get("__pos_ts__", 0.0)
+    now     = time.time()
+    stale   = last is None or (now - last_ts) > 25.0
+
+    if not stale:
         dx  = x - last[0]
         dy  = y - last[1]
         movement = math.sqrt(dx * dx + dy * dy)
@@ -237,8 +242,10 @@ def localize(
 
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
+    # else: WiFi just reconnected — accept new position directly, no stale blend
 
-    kalman_states["__pos__"] = (x, y)
+    kalman_states["__pos__"]    = (x, y)
+    kalman_states["__pos_ts__"] = now
 
     return {
         "x":              round(x, 3),
