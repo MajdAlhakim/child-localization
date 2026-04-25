@@ -161,7 +161,9 @@ async def receive_packet(
     state = device_states[mac]
     state.last_seen_ts = time.time()
 
-    # ── RSSI localization (runs when Wi-Fi scan is present) ───────────────────
+    # ── RSSI localization + floor determination ───────────────────────────────
+    # Floor priority: barometer (packet.floor) > BSSID majority vote.
+    # BSSID voting is only used as a fallback when no barometer data arrives.
     rssi_result: dict | None = None
     if wifi:
         await _refresh_ap_cache_if_stale(db)
@@ -175,36 +177,36 @@ async def receive_packet(
                     rssi_result["anchor_count"], rssi_result["avg_rssi_error"],
                 )
 
-            # Determine active floor: majority vote across BSSIDs seen in this scan
-            scan_bssids = {ap.bssid.lower() for ap in wifi}
-            floor_votes: dict[str, int] = {}
-            floor_number_map: dict[str, int] = {}
-            for entry in _ap_cache:
-                if entry["bssid"].lower() in scan_bssids:
-                    fp_id = entry["floor_plan_id"]
-                    floor_votes[fp_id] = floor_votes.get(fp_id, 0) + 1
-                    floor_number_map[fp_id] = entry["floor_number"]
-            if floor_votes:
-                best_fp_id = max(floor_votes, key=lambda k: floor_votes[k])
-                state.active_floor_plan_id = best_fp_id
-                state.active_floor_number  = floor_number_map[best_fp_id]
-                logger.info(
-                    "  Floor: floor_plan_id=%s floor_number=%d (votes=%s)",
-                    best_fp_id, state.active_floor_number, floor_votes,
-                )
+            # BSSID majority-vote floor — only when barometer is not available
+            if packet.floor is None and _ap_cache:
+                scan_bssids = {ap.bssid.lower() for ap in wifi}
+                floor_votes: dict[str, int] = {}
+                floor_number_map: dict[str, int] = {}
+                for entry in _ap_cache:
+                    if entry["bssid"].lower() in scan_bssids:
+                        fp_id = entry["floor_plan_id"]
+                        floor_votes[fp_id] = floor_votes.get(fp_id, 0) + 1
+                        floor_number_map[fp_id] = entry["floor_number"]
+                if floor_votes:
+                    best_fp_id = max(floor_votes, key=lambda k: floor_votes[k])
+                    state.active_floor_plan_id = best_fp_id
+                    state.active_floor_number  = floor_number_map[best_fp_id]
+                    logger.info(
+                        "  Floor (BSSID fallback): floor_plan_id=%s floor_number=%d (votes=%s)",
+                        best_fp_id, state.active_floor_number, floor_votes,
+                    )
 
-    # ── Barometer floor override (more authoritative than BSSID majority vote) ─
-    # When the firmware sends "floor": <int>, apply it directly.
-    # Also update active_floor_plan_id by finding a floor plan with matching
-    # floor_number in the AP cache (uses the same venue's floor plans).
+    # ── Barometer floor (highest priority — always wins over BSSID vote) ──────
     if packet.floor is not None:
+        if not wifi:
+            await _refresh_ap_cache_if_stale(db)
         state.active_floor_number = packet.floor
         for entry in _ap_cache:
             if entry["floor_number"] == packet.floor:
                 state.active_floor_plan_id = entry["floor_plan_id"]
                 break
         logger.info(
-            "  Barometer floor override: floor_number=%d floor_plan_id=%s",
+            "  Floor (barometer): floor_number=%d floor_plan_id=%s",
             state.active_floor_number, state.active_floor_plan_id,
         )
 
