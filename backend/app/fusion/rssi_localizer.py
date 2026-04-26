@@ -45,7 +45,7 @@ class KalmanState:
         return self.x
 
 
-_MAX_JUMP_M     = 4.0   # hard cap on position change per scan (metres)
+_MAX_JUMP_M     = 6.0   # hard cap on position change per scan (metres)
 _MIN_RSSI_DBM   = -80.0 # drop anchors weaker than this — too noisy to help
 
 
@@ -148,16 +148,13 @@ def localize(
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
-    # ── Kalman-smooth RSSI; skip weak anchors ─────────────────────────────────
+    # ── Build anchors from raw RSSI; skip weak anchors ───────────────────────
     anchors: list[tuple[dict, float]] = []
     for prefix, ap in known_by_prefix.items():
         raw_rssi = scan_by_prefix.get(prefix)
         if raw_rssi is None or raw_rssi < _MIN_RSSI_DBM:
             continue
-        if prefix not in kalman_states:
-            kalman_states[prefix] = KalmanState(x=raw_rssi)
-        smoothed = kalman_states[prefix].update(raw_rssi)
-        dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], smoothed)
+        dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], raw_rssi)
         anchors.append((ap, dist))
 
     if not anchors:
@@ -232,11 +229,11 @@ def localize(
             movement = _MAX_JUMP_M
 
         if movement < 0.5:
-            alpha = 0.30   # stationary — absorbs jitter while staying responsive
+            alpha = 0.50   # stationary
         elif movement < 4.0:
-            alpha = 0.75   # walking
+            alpha = 0.85   # walking
         else:
-            alpha = 0.95   # fast movement (after cap, this only fires at exactly 4 m)
+            alpha = 0.95   # fast movement
 
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
