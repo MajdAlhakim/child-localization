@@ -21,6 +21,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://admin:changeme@db:5432/localization
+      GATEWAY_API_KEY: "580a92b1cad8ad81b7ae90c23fb222443d9c87aac4ce4a7728a3f9e99e3e4990"
+      BEETLE_RSSI_OFFSET_DB: "4.0"
     depends_on:
       db:
         condition: service_healthy
