@@ -81,9 +81,8 @@ def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
 
 
 def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
-    """Gauss-Newton nonlinear multilateration (up to 10 iterations, weighted)."""
-    x = sum(ap["x"] for ap, _ in anchors) / len(anchors)
-    y = sum(ap["y"] for ap, _ in anchors) / len(anchors)
+    """C-Taylor hybrid: weighted-centroid init + Taylor (Gauss-Newton) refinement, w=1/d²."""
+    x, y = _weighted_centroid(anchors)
 
     for _ in range(10):
         jtj00 = jtj01 = jtj11 = 0.0
@@ -95,7 +94,7 @@ def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
             dist = math.sqrt(dx * dx + dy * dy)
             if dist < 1e-6:
                 dist = 1e-6
-            w    = 1.0 / (d + 0.5)
+            w    = 1.0 / (d * d)
             jx   = dx / dist
             jy   = dy / dist
             res  = dist - d
