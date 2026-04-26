@@ -1,22 +1,21 @@
 """
 backend/app/fusion/rssi_localizer.py
 
-RSSI-based position estimator.
+RSSI-based position estimator optimized for 2.4GHz.
 
 Pipeline:
-  1. Adaptive Kalman per AP: Q=3.0 on residual >10 dBm (moving), Q=1.0 stable.
-     R raised to 12.0 for stronger noise suppression of stationary RSSI jitter.
-  2. Drop anchors with raw RSSI < -80 dBm (too weak to be reliable).
+  1. Adaptive Kalman per AP: Asymmetric Q to handle body-shadowing vs real movement.
+  2. Drop anchors with raw RSSI < -90 dBm.
   3. Log-distance path loss → distance, clamped [0.3, 80] m.
   4. Sort by (distance asc, rssi desc); reject outliers > 2σ; top-5 only.
-  5. Drop scan when avg_rssi_error > 20 dBm (very unreliable).
-  6. Snap to AP only when distance < 0.5 m (effectively disabled — prevents false snaps).
-  7. ≥3 anchors → Gauss-Newton; fall back to centroid (top-3) if diverges.
+  5. Drop scan when avg_rssi_error > 20 dBm (calculated via Kalman residual).
+  6. Snap to AP only when RSSI > -40 dBm (unmistakably close).
+  7. ≥3 anchors → Inverse-square weighted centroid; fallback to top-3 if out of bounds.
      2 anchors → centroid.  1 anchor → None (distance only, no position).
   8. Three-zone adaptive EMA:
-       movement < 1 m  → α=0.15  (stationary — very sticky)
+       movement < 1 m  → α=0.15  (stationary — highly sticky)
        movement 1–4 m  → α=0.60  (walking)
-       movement > 4 m  → α=0.80  (fast) + capped at 4 m/scan
+       movement > 4 m  → α=0.80  (fast) + capped at 6 m/scan
      State stored in kalman_states["__pos__"].
   9. Returns {"x", "y", "anchor_count", "avg_rssi_error"} or None.
 """
@@ -35,18 +34,25 @@ class KalmanState:
     R: float = 12.0   # measurement noise — raised to suppress stationary jitter
 
     def update(self, z: float) -> float:
-        """Adaptive Q: 3.0 on residual > 10 dBm (real movement), 1.0 when stable."""
-        residual = abs(z - self.x)
-        q = 3.0 if residual > 10.0 else 1.0
+        """Asymmetric Q: trust signal increases (movement), distrust sudden drops (blockage)."""
+        residual = z - self.x
+        
+        if residual > 5.0:
+            q = 3.0   # Signal got stronger suddenly: tag likely moved towards AP
+        elif residual < -10.0:
+            q = 5.0   # Signal dropped suddenly: human blockage (stay sticky)
+        else:
+            q = 1.0   # Stable / minor noise
+            
         p_pred = self.p + q
         k = p_pred / (p_pred + self.R)
-        self.x = self.x + k * (z - self.x)
+        self.x = self.x + k * residual
         self.p = (1.0 - k) * p_pred
         return self.x
 
 
 _MAX_JUMP_M     = 6.0   # hard cap on position change per scan (metres)
-_MIN_RSSI_DBM   = -80.0 # drop anchors weaker than this — too noisy to help
+_MIN_RSSI_DBM   = -90.0 # drop anchors weaker than this — too noisy to help
 
 
 # ── Distance estimation ───────────────────────────────────────────────────────
@@ -60,64 +66,24 @@ def estimate_distance(rssi_ref: float, path_loss_n: float, rssi_smoothed: float)
 # ── Geometry helpers ──────────────────────────────────────────────────────────
 
 def _weighted_centroid(anchors: list) -> tuple[float, float]:
-    """w = 1/(dist + 0.5) — linear weighting avoids the AP-pull effect."""
-    weights = [1.0 / (d + 0.5) for _, d in anchors]
+    """Inverse-square weighting: w = 1 / (d^2). The +0.1 prevents division by zero."""
+    weights = [1.0 / (t[1]**2 + 0.1) for t in anchors]
     w_sum = sum(weights)
-    x = sum(w * ap["x"] for (ap, _), w in zip(anchors, weights)) / w_sum
-    y = sum(w * ap["y"] for (ap, _), w in zip(anchors, weights)) / w_sum
+    x = sum(w * t[0]["x"] for t, w in zip(anchors, weights)) / w_sum
+    y = sum(w * t[0]["y"] for t, w in zip(anchors, weights)) / w_sum
     return x, y
 
 
 def _is_within_bounds(pos: tuple[float, float], anchors: list) -> bool:
     """Reject result if it falls > 30% outside the AP cluster bounding box."""
-    min_x = min(ap["x"] for ap, _ in anchors)
-    max_x = max(ap["x"] for ap, _ in anchors)
-    min_y = min(ap["y"] for ap, _ in anchors)
-    max_y = max(ap["y"] for ap, _ in anchors)
+    min_x = min(t[0]["x"] for t in anchors)
+    max_x = max(t[0]["x"] for t in anchors)
+    min_y = min(t[0]["y"] for t in anchors)
+    max_y = max(t[0]["y"] for t in anchors)
     mx = max(max_x - min_x, 5.0) * 0.30 + 2.0
     my = max(max_y - min_y, 5.0) * 0.30 + 2.0
     return ((min_x - mx) <= pos[0] <= (max_x + mx) and
             (min_y - my) <= pos[1] <= (max_y + my))
-
-
-def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
-    """C-Taylor hybrid: weighted-centroid init + Taylor (Gauss-Newton) refinement, w=1/d²."""
-    x, y = _weighted_centroid(anchors)
-
-    for _ in range(10):
-        jtj00 = jtj01 = jtj11 = 0.0
-        jtr0  = jtr1  = 0.0
-
-        for ap, d in anchors:
-            dx   = x - ap["x"]
-            dy   = y - ap["y"]
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist < 1e-6:
-                dist = 1e-6
-            w    = 1.0 / (d + 0.5)
-            jx   = dx / dist
-            jy   = dy / dist
-            res  = dist - d
-
-            jtj00 += w * jx * jx
-            jtj01 += w * jx * jy
-            jtj11 += w * jy * jy
-            jtr0  += w * jx * res
-            jtr1  += w * jy * res
-
-        det = jtj00 * jtj11 - jtj01 * jtj01
-        if abs(det) < 1e-8:
-            return None
-
-        dx_upd = (jtj11 * jtr0 - jtj01 * jtr1) / det
-        dy_upd = (jtj00 * jtr1 - jtj01 * jtr0) / det
-        x -= dx_upd
-        y -= dy_upd
-
-        if math.sqrt(dx_upd * dx_upd + dy_upd * dy_upd) < 1e-3:
-            break
-
-    return x, y
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -144,32 +110,39 @@ def localize(
         if p not in scan_by_prefix or rssi > scan_by_prefix[p]:
             scan_by_prefix[p] = rssi
 
+    # NOTE: In a highly optimized system, known_by_prefix should be pre-computed 
+    # outside this function at startup, but computing it here is safe.
     known_by_prefix: dict[str, dict] = {}
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
     # ── Kalman-smooth RSSI; skip weak anchors ─────────────────────────────────
-    anchors: list[tuple[dict, float]] = []
+    # We now store a 4-tuple: (ap_dict, distance, raw_rssi, prefix) to eliminate re-lookups
+    anchors: list[tuple[dict, float, float, str]] = []
+    
     for prefix, ap in known_by_prefix.items():
         raw_rssi = scan_by_prefix.get(prefix)
         if raw_rssi is None or raw_rssi < _MIN_RSSI_DBM:
             continue
+            
         if prefix not in kalman_states:
             kalman_states[prefix] = KalmanState(x=raw_rssi)
+            
         smoothed = kalman_states[prefix].update(raw_rssi)
         dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], smoothed)
-        anchors.append((ap, dist))
+        anchors.append((ap, dist, raw_rssi, prefix))
 
     if not anchors:
         return None
 
     # ── Sort: nearest first; break ties by strongest raw RSSI ────────────────
-    anchors.sort(key=lambda t: (t[1], -scan_by_prefix[_prefix(t[0]["bssid"])]))
+    # t[1] is distance, t[2] is raw_rssi
+    anchors.sort(key=lambda t: (t[1], -t[2]))
 
     # ── Outlier rejection (> 2σ from mean distance) ───────────────────────────
     if len(anchors) > 3:
-        mean = sum(d for _, d in anchors) / len(anchors)
-        std  = math.sqrt(sum((d - mean) ** 2 for _, d in anchors) / len(anchors))
+        mean = sum(t[1] for t in anchors) / len(anchors)
+        std  = math.sqrt(sum((t[1] - mean) ** 2 for t in anchors) / len(anchors))
         filtered = [a for a in anchors if abs(a[1] - mean) <= 2.0 * std]
         if filtered:
             anchors = filtered
@@ -177,20 +150,17 @@ def localize(
     # ── Limit to top-5 ───────────────────────────────────────────────────────
     anchors = anchors[:5]
 
-    # ── Quality metric ────────────────────────────────────────────────────────
-    avg_error = sum(
-        abs(scan_by_prefix[_prefix(ap["bssid"])] -
-            (ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(max(dist, 0.001))))
-        for ap, dist in anchors
-    ) / len(anchors)
+    # ── Quality metric (Optimized) ────────────────────────────────────────────
+    # Calculates the absolute difference between raw_rssi and Kalman smoothed x
+    avg_error = sum(abs(t[2] - kalman_states[t[3]].x) for t in anchors) / len(anchors)
 
-    # Drop truly unreliable scans (20 dBm is generous — only rejects garbage)
+    # Drop truly unreliable scans
     if avg_error > 20.0:
         return None
 
-    # ── Fast bootstrap: snap only when unmistakably next to an AP (< 0.5 m) ──
-    strongest = max(anchors, key=lambda a: scan_by_prefix[_prefix(a[0]["bssid"])])
-    if strongest[1] < 0.5:
+    # ── Fast bootstrap: snap only when unmistakably next to an AP ─────────────
+    strongest = max(anchors, key=lambda t: t[2])  # Find max raw_rssi
+    if strongest[2] > -40.0:
         ap = strongest[0]
         x, y = ap["x"], ap["y"]
         last = kalman_states.get("__pos__")
@@ -204,13 +174,9 @@ def localize(
     # ── Position estimate ─────────────────────────────────────────────────────
     if len(anchors) == 1:
         return None   # one AP gives only a distance, not a position
-    elif len(anchors) == 2:
-        x, y = _weighted_centroid(anchors)
     else:
-        ls = _multilateral_ls(anchors)
-        if ls is not None and _is_within_bounds(ls, anchors):
-            x, y = ls
-        else:
+        x, y = _weighted_centroid(anchors)
+        if not _is_within_bounds((x, y), anchors):
             x, y = _weighted_centroid(anchors[:3])
 
     # ── Three-zone adaptive EMA with hard jump cap ────────────────────────────
@@ -231,12 +197,12 @@ def localize(
             y = last[1] + dy * scale
             movement = _MAX_JUMP_M
 
-        if movement < 0.5:
-            alpha = 0.50   # stationary
+        if movement < 1.0:
+            alpha = 0.15   # stationary
         elif movement < 4.0:
-            alpha = 0.85   # walking
+            alpha = 0.60   # walking
         else:
-            alpha = 0.95   # fast movement
+            alpha = 0.80   # fast movement
 
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
