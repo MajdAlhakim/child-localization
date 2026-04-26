@@ -12,13 +12,12 @@ All operations are routed to the "active" floor plan, determined by:
 The radio map computation still uses in-memory storage (fast, always recomputable).
 """
 
-import math
 import os
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Header, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -33,9 +32,6 @@ router = APIRouter()
 _UPLOAD_DIR = Path("/srv/backend/uploads")
 _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Shared task / radio-map store (in-memory, shared with venues.py via import-time dict)
-_task_store: dict[str, dict] = {}
-_radio_maps: dict[str, list[dict]] = {}
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────
@@ -279,82 +275,3 @@ async def get_grid_points(
     }
 
 
-# ── Radio Map ─────────────────────────────────────────────────────────────────
-
-def _compute_bg(task_id: str, fpid_str: str, points: list, aps: list) -> None:
-    total   = max(len(points) * len(aps), 1)
-    entries = []
-    done    = 0
-    for pt in points:
-        for ap in aps:
-            dx = pt["x"] - ap["x"]
-            dy = pt["y"] - ap["y"]
-            floor_dist = math.sqrt(dx * dx + dy * dy)
-            slant      = math.sqrt(floor_dist ** 2 + ap.get("ceiling_height", 3.0) ** 2)
-            slant      = max(slant, 0.1)
-            rssi_est   = ap["rssi_ref"] - 10.0 * ap["path_loss_n"] * math.log10(slant)
-            entries.append({
-                "bssid":    ap["bssid"],
-                "x_m":      round(pt["x"], 3),
-                "y_m":      round(pt["y"], 3),
-                "rssi_est": round(rssi_est, 2),
-                "dist_m":   round(slant, 3),
-            })
-            done += 1
-            if done % 500 == 0:
-                _task_store[task_id]["progress"] = int(done / total * 100)
-    _radio_maps[fpid_str] = entries
-    _task_store[task_id]  = {"status": "done", "progress": 100}
-
-
-@router.post("/api/v1/venue/radio-map/compute", status_code=status.HTTP_200_OK)
-async def compute_radio_map(
-    background_tasks: BackgroundTasks,
-    x_api_key: str | None = Header(default=None),
-    x_floor_plan_id: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, str]:
-    _check_key(x_api_key)
-    fp = await _active_fp(db, x_floor_plan_id)
-
-    # await db.refresh() explicitly reloads the relationship collections in
-    # the async context. selectinload secondary SELECTs fire outside the
-    # greenlet when the object is already in the identity map, causing
-    # MissingGreenlet. refresh() is directly awaited so it always runs
-    # inside the correct async context.
-    await db.refresh(fp, ['grid_points', 'access_points'])
-
-    if not fp.grid_points:
-        raise HTTPException(status_code=422, detail="No grid stored. Save the grid first.")
-    if not fp.access_points:
-        raise HTTPException(status_code=422, detail="No APs stored. Place APs first.")
-
-    points  = [{"x": p.x, "y": p.y} for p in fp.grid_points]
-    aps     = [{"bssid": a.bssid, "x": a.x, "y": a.y,
-                "rssi_ref": a.rssi_ref, "path_loss_n": a.path_loss_n,
-                "ceiling_height": a.ceiling_height} for a in fp.access_points]
-
-    task_id = str(uuid.uuid4())
-    _task_store[task_id] = {"status": "computing", "progress": 0}
-    background_tasks.add_task(_compute_bg, task_id, str(fp.id), points, aps)
-    return {"status": "computing", "task_id": task_id}
-
-
-@router.get("/api/v1/venue/radio-map/status/{task_id}")
-async def radio_map_status(task_id: str) -> dict[str, Any]:
-    task = _task_store.get(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
-
-
-@router.get("/api/v1/venue/radio-map")
-async def get_radio_map(
-    x_floor_plan_id: str | None = Header(default=None),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    fp = await _active_fp(db, x_floor_plan_id)
-    data = _radio_maps.get(str(fp.id))
-    if not data:
-        raise HTTPException(status_code=404, detail="Radio map not computed yet")
-    return {"radio_map": data}
