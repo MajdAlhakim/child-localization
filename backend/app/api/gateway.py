@@ -59,6 +59,14 @@ _AP_CACHE_TTL: float  = 60.0   # seconds
 # ── Minimum RSSI anchors needed before we snap PDR to RSSI ───────────────────
 _MIN_RSSI_ANCHORS: int = 1
 
+# ── RSSI offset for the scanner Beetle (dBm added to every reading) ───────────
+# The Beetle ESP32-C6 PCB antenna reads ~3–8 dBm weaker than the phone antenna
+# used to calibrate the radio map. A positive offset corrects for this bias so
+# the log-distance model produces accurate distances.
+# Set BEETLE_RSSI_OFFSET_DB in the environment to tune without redeploying.
+# Start with 0.0 and increase by 2 dBm until the tag position matches reality.
+_BEETLE_RSSI_OFFSET_DB: float = float(os.environ.get("BEETLE_RSSI_OFFSET_DB", "8.0"))
+
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
 
@@ -168,7 +176,7 @@ async def receive_packet(
     if wifi:
         await _refresh_ap_cache_if_stale(db)
         if _ap_cache:
-            scan = [{"bssid": ap.bssid, "rssi": ap.rssi} for ap in wifi]
+            scan = [{"bssid": ap.bssid, "rssi": ap.rssi + _BEETLE_RSSI_OFFSET_DB} for ap in wifi]
             rssi_result = rssi_localize(scan, _ap_cache, state.kalman_states)
             if rssi_result:
                 state.last_rssi_result = rssi_result   # cache for heartbeat broadcasts
