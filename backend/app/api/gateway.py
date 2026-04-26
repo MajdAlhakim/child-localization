@@ -65,7 +65,7 @@ _MIN_RSSI_ANCHORS: int = 1
 # the log-distance model produces accurate distances.
 # Set BEETLE_RSSI_OFFSET_DB in the environment to tune without redeploying.
 # Start with 0.0 and increase by 2 dBm until the tag position matches reality.
-_BEETLE_RSSI_OFFSET_DB: float = float(os.environ.get("BEETLE_RSSI_OFFSET_DB", "8.0"))
+_BEETLE_RSSI_OFFSET_DB: float = float(os.environ.get("BEETLE_RSSI_OFFSET_DB", "0.0"))
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────

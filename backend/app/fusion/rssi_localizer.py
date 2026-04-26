@@ -94,7 +94,7 @@ def _multilateral_ls(anchors: list) -> tuple[float, float] | None:
             dist = math.sqrt(dx * dx + dy * dy)
             if dist < 1e-6:
                 dist = 1e-6
-            w    = 1.0 / (d * d)
+            w    = 1.0 / (d + 0.5)
             jx   = dx / dist
             jy   = dy / dist
             res  = dist - d
@@ -148,13 +148,16 @@ def localize(
     for ap in known_aps:
         known_by_prefix.setdefault(_prefix(ap["bssid"]), ap)
 
-    # ── Build anchors from raw RSSI; skip weak anchors ───────────────────────
+    # ── Kalman-smooth RSSI; skip weak anchors ─────────────────────────────────
     anchors: list[tuple[dict, float]] = []
     for prefix, ap in known_by_prefix.items():
         raw_rssi = scan_by_prefix.get(prefix)
         if raw_rssi is None or raw_rssi < _MIN_RSSI_DBM:
             continue
-        dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], raw_rssi)
+        if prefix not in kalman_states:
+            kalman_states[prefix] = KalmanState(x=raw_rssi)
+        smoothed = kalman_states[prefix].update(raw_rssi)
+        dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], smoothed)
         anchors.append((ap, dist))
 
     if not anchors:
