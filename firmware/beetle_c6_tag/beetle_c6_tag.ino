@@ -270,14 +270,11 @@ static void uart_task(void *arg) {
 // Pick the strongest BSSID from the scanner's list that matches WIFI_SSID and
 // initiate a direct association (no ESP32 scan).
 static void connect_to_best_ap() {
-  // Avoid WiFi.begin() while the radio is already in the middle of an
-  // association attempt — causes "sta is connecting, cannot set config".
-  wl_status_t st = WiFi.status();
-  if (st == WL_IDLE_STATUS || st == WL_DISCONNECTED || st == WL_CONNECTED) {
-    // OK to proceed (WL_CONNECTED means we intentionally switch BSSID)
-  } else {
-    return;
-  }
+  // Force-reset any stuck state (WL_CONNECT_FAILED, WL_NO_SSID_AVAIL,
+  // WL_CONNECTION_LOST) before calling begin().  Without this the old guard
+  // returned early on every retry loop, causing 60-90 s blackouts.
+  // false = keep saved credentials; does not erase SSID/pass.
+  WiFi.disconnect(false);
 
   APRecord best;
   int  best_rssi = -1000;
