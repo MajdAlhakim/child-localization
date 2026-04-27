@@ -40,6 +40,11 @@ class ScanViewModel(
     private var placedBssids = mutableSetOf<String>()
     private val stableApOrder = mutableListOf<String>()
 
+    // Rolling RSSI history per BSSID — averaged before saving as rssiRef.
+    // 5-scan window at 15 s interval = ~75 s of smoothing, eliminating single-scan spikes.
+    private val rssiHistory = mutableMapOf<String, ArrayDeque<Int>>()
+    private val RSSI_HISTORY_SIZE = 5
+
     /** The AP with the highest RSSI among currently visible APs. */
     val bestAp: ScannedAp? get() = _state.value.aps.maxByOrNull { it.rssi }
 
@@ -73,10 +78,14 @@ class ScanViewModel(
                     (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && sr.is80211mcResponder)
                 } else false
                 val existing = currentAps.find { ap -> ap.bssid == sr.BSSID }
+                val q = rssiHistory.getOrPut(sr.BSSID) { ArrayDeque() }
+                q.addLast(sr.level)
+                if (q.size > RSSI_HISTORY_SIZE) q.removeFirst()
+                val avgRssi = q.average().toInt()
                 scanMap[sr.BSSID] = ScannedAp(
                     bssid = sr.BSSID,
                     ssid = sr.SSID.ifBlank { "<Hidden>" },
-                    rssi = sr.level,
+                    rssi = avgRssi,
                     rttSupported = rttSupported,
                     frequencyMhz = sr.frequency,
                     rttDistanceM = existing?.rttDistanceM,

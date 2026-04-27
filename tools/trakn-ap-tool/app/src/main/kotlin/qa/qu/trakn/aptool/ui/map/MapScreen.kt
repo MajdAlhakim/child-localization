@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,7 +74,6 @@ fun MapScreen(
     scanViewModel: ScanViewModel,
 ) {
     val state     by viewModel.state.collectAsState()
-    val scanState by scanViewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -108,7 +108,7 @@ fun MapScreen(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "Stand at a visible AP location → tap that spot on the map",
+                "Stand 1 m from an AP → tap its position on the map → hold 5 s",
                 color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
             )
         }
@@ -134,7 +134,7 @@ fun MapScreen(
                         val yOnImg = (tapOffset.y - imgTop)  / (scale * fitScale)
 
                         if (xOnImg in 0f..imgNaturalW && yOnImg in 0f..imgNaturalH) {
-                            viewModel.onMapTap(xOnImg, yOnImg, scanViewModel.bestAp, scanState.aps)
+                            viewModel.onMapTap(xOnImg, yOnImg)
                         }
                     }
                 }
@@ -239,6 +239,38 @@ fun MapScreen(
                 .size(44.dp),
         ) {
             Icon(Icons.Default.CenterFocusStrong, contentDescription = "Reset view", modifier = Modifier.size(20.dp))
+        }
+
+        // Capturing overlay — shown during 5s RSSI scan
+        state.capturingProgress?.let { progress ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.55f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        progress = { progress },
+                        color    = Orange,
+                        modifier = Modifier.size(72.dp),
+                        strokeWidth = 6.dp,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Capturing RSSI… ${(progress * 5).toInt() + 1} / 5 s",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Stay still near the AP",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         }
 
         SnackbarHost(snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))

@@ -1,6 +1,11 @@
 package qa.qu.trakn.aptool.ui.map
 
+import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -41,6 +46,8 @@ data class MapUiState(
     val gridScale: Float = SCALE_PX_PER_M,           // px per metre from server
     // Snackbar
     val snackbarMsg: String? = null,
+    // 5-second RSSI capture progress (null = idle, 0f–1f = in progress)
+    val capturingProgress: Float? = null,
 )
 
 class MapViewModel(
@@ -50,6 +57,13 @@ class MapViewModel(
 
     private val _state = MutableStateFlow(MapUiState())
     val state: StateFlow<MapUiState> = _state.asStateFlow()
+
+    private val wifiManager =
+        context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+
+    // Per-BSSID readings collected during the 5s capture window
+    private data class ApReading(val ssid: String, val frequencyMhz: Int, val readings: MutableList<Int> = mutableListOf())
+    private val captureData = mutableMapOf<String, ApReading>()
 
     init {
         loadFloorPlanUrl()
@@ -161,44 +175,86 @@ class MapViewModel(
     private fun macGroup(bssid: String): String {
         val normalized = bssid.lowercase().trimEnd()
         if (normalized.length < 2) return normalized
-        val withoutLast = normalized.dropLast(1)   // e.g. "24:16:1b:76:27:2"
-        val lastChar    = normalized.last()
-        val cls         = if (lastChar.isLetter()) "alpha" else "digit"
-        return "$withoutLast:$cls"
+        // Group key = everything except the last hex digit.
+        // e.g. "24:16:1b:76:28:cd" and "24:16:1b:76:28:c1" → "24:16:1b:76:28:c"
+        // This correctly unifies the 2.4 GHz and 5 GHz BSSIDs of the same physical AP.
+        return normalized.dropLast(1)
     }
 
-    companion object {
-        // Two BSSIDs from the same physical AP should have very similar RSSI.
-        // Allow up to 12 dBm difference to absorb measurement noise across radios.
-        private const val RSSI_GROUP_TOLERANCE_DBM = 12
-    }
 
     /**
      * Called when the user taps a location on the floor plan.
-     * [currentBestAp] is the strongest visible AP.
-     * [allAps] is the full current scan list — used to find every BSSID sharing the same
-     * physical AP radio (same BSSID prefix up to penultimate hex digit, same last-char class,
-     * and RSSI within [RSSI_GROUP_TOLERANCE_DBM] dBm of the best AP).
+     * Starts a 5-second RSSI capture: scans every 500 ms, averages readings per BSSID,
+     * then groups BSSIDs from the same physical AP and shows the confirm sheet.
      */
-    fun onMapTap(xPx: Float, yPx: Float, currentBestAp: ScannedAp?, allAps: List<ScannedAp>) {
-        val xm = xPx / SCALE_PX_PER_M
-        val ym = yPx / SCALE_PX_PER_M
-        if (currentBestAp == null) {
-            _state.update { it.copy(snackbarMsg = "No APs visible — wait for scan to complete") }
+    fun onMapTap(xPx: Float, yPx: Float) {
+        if (_state.value.capturingProgress != null) return   // already capturing
+        val xm = (xPx / SCALE_PX_PER_M).toDouble()
+        val ym = (yPx / SCALE_PX_PER_M).toDouble()
+        viewModelScope.launch { capture(xm, ym) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun capture(xm: Double, ym: Double) {
+        captureData.clear()
+        _state.update { it.copy(capturingProgress = 0f, pendingTapM = Pair(xm, ym)) }
+
+        fun collectResults() {
+            @Suppress("DEPRECATION")
+            (wifiManager.scanResults ?: return).forEach { sr ->
+                val bssid = sr.BSSID ?: return@forEach
+                @Suppress("DEPRECATION") val ssid = sr.SSID ?: ""
+                captureData.getOrPut(bssid) { ApReading(ssid, sr.frequency) }.readings.add(sr.level)
+            }
+        }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) { collectResults() }
+        }
+        context.applicationContext.registerReceiver(
+            receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+        )
+        collectResults()   // seed with whatever is already cached
+
+        val startMs = System.currentTimeMillis()
+        val captureMs = 5_000L
+        while (System.currentTimeMillis() - startMs < captureMs) {
+            val elapsed  = System.currentTimeMillis() - startMs
+            _state.update { it.copy(capturingProgress = (elapsed / captureMs.toFloat()).coerceIn(0f, 1f)) }
+            @Suppress("DEPRECATION") wifiManager.startScan()
+            delay(500)
+        }
+
+        try { context.applicationContext.unregisterReceiver(receiver) } catch (_: Exception) {}
+        _state.update { it.copy(capturingProgress = null) }
+
+        if (captureData.isEmpty()) {
+            _state.update { it.copy(snackbarMsg = "No APs detected — try again") }
             return
         }
-        val group = allAps
-            .filter { macGroup(it.bssid) == macGroup(currentBestAp.bssid) }
-            .filter { kotlin.math.abs(it.rssi - currentBestAp.rssi) <= RSSI_GROUP_TOLERANCE_DBM }
-            .sortedByDescending { it.rssi }
-            .ifEmpty { listOf(currentBestAp) }
-        _state.update {
-            it.copy(
-                pendingTapM    = Pair(xm.toDouble(), ym.toDouble()),
-                pendingBestAp  = currentBestAp,
-                pendingGroup   = group,
-                showConfirmSheet = true,
+
+        // Average RSSI per BSSID and build ScannedAp list (all bands)
+        val scanned = captureData.map { (bssid, r) ->
+            ScannedAp(
+                bssid        = bssid,
+                ssid         = r.ssid,
+                rssi         = r.readings.average().toInt(),
+                rttSupported = false,
+                frequencyMhz = r.frequencyMhz,
             )
+        }.sortedByDescending { it.rssi }
+
+        // Group all BSSIDs by physical AP (macGroup prefix), pick the group with
+        // the highest average RSSI — more robust than relying on a single BSSID peak.
+        val bestGroup = scanned
+            .groupBy { macGroup(it.bssid) }
+            .maxByOrNull { (_, aps) -> aps.map { it.rssi }.average() }
+            ?.value ?: return
+
+        if (bestGroup.isEmpty()) return
+        val best = bestGroup.maxByOrNull { it.rssi } ?: return
+        _state.update {
+            it.copy(pendingBestAp = best, pendingGroup = bestGroup, showConfirmSheet = true)
         }
     }
 
@@ -239,8 +295,8 @@ class MapViewModel(
                             PostApRequest(
                                 bssid     = ap.bssid,
                                 ssid      = ap.ssid,
-                                rssiRef   = ap.rssi.toDouble(),
-                                pathLossN = 2.7,
+                                rssiRef   = -38.0,
+                                pathLossN = 2.1,
                                 x         = xm,
                                 y         = ym,
                                 groupId   = groupId,
@@ -252,8 +308,8 @@ class MapViewModel(
                     newAps.add(AccessPoint(
                         bssid     = ap.bssid,
                         ssid      = ap.ssid,
-                        rssiRef   = ap.rssi.toDouble(),
-                        pathLossN = 2.7,
+                        rssiRef   = -38.0,
+                        pathLossN = 2.1,
                         x         = xm,
                         y         = ym,
                     ))

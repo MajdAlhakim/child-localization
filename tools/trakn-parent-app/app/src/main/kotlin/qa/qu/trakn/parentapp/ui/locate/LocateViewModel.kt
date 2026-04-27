@@ -34,6 +34,7 @@ import qa.qu.trakn.parentapp.data.SettingsRepository
 import qa.qu.trakn.parentapp.data.models.GATEWAY_API_KEY
 import qa.qu.trakn.parentapp.data.api.RetrofitClient
 import qa.qu.trakn.parentapp.data.models.AccessPoint
+import qa.qu.trakn.parentapp.data.models.FloorPlanInfo
 import qa.qu.trakn.parentapp.data.models.LocationEstimate
 import qa.qu.trakn.parentapp.data.models.ScannedAp
 import qa.qu.trakn.parentapp.data.models.WsPosition
@@ -47,28 +48,32 @@ import kotlin.math.sqrt
 private const val TAG = "LocateViewModel"
 const val SCALE_PX_PER_M = 10f
 
-private const val RECONNECT_DELAY_MS  = 3_000L
-private const val SCAN_INTERVAL_MS    = 2_000L
+private const val RECONNECT_DELAY_MS   = 3_000L
+private const val SCAN_INTERVAL_MS     = 2_000L
 private const val TAG_POLL_INTERVAL_MS = 5_000L
-private const val RSSI_ALPHA          = 0.25
-private const val POS_ALPHA           = 0.25
-private const val MIN_RSSI_DBM        = -85
-private const val ALERT_DISTANCE_M    = 20.0
-private const val ALERT_COOLDOWN_MS   = 60_000L
-private const val NOTIF_CHANNEL_ID   = "trakn_alerts"
-private const val NOTIF_ID            = 1001
+private const val MIN_RSSI_DBM         = -85
+private const val ALERT_DISTANCE_M     = 20.0
+private const val ALERT_COOLDOWN_MS    = 60_000L
+private const val NOTIF_CHANNEL_ID    = "trakn_alerts"
+private const val NOTIF_ID             = 1001
 
 data class LocateUiState(
     val floorPlanUrl: String?             = null,
     val floorPlanError: String?           = null,
     val knownAps: List<AccessPoint>       = emptyList(),
-    val childEstimate: LocationEstimate?  = null,   // child tag — from WebSocket
-    val parentEstimate: LocationEstimate? = null,   // parent phone — from local Wi-Fi scan
-    val distanceM: Double?                = null,   // metres between child and parent
-    val alertActive: Boolean              = false,  // true when distance > ALERT_DISTANCE_M
+    val childEstimate: LocationEstimate?  = null,
+    val parentEstimate: LocationEstimate? = null,
+    val distanceM: Double?                = null,
+    val alertActive: Boolean              = false,
     val statusMsg: String                 = "Connecting…",
     val wsConnected: Boolean              = false,
     val tagId: String                     = "",
+    // Floor state
+    val availableFloors: List<FloorPlanInfo> = emptyList(),
+    val selectedFloorPlanId: String?      = null,
+    val selectedFloorNumber: Int?         = null,
+    val tagFloorNumber: Int?              = null,   // floor the tag is currently on
+    val floorMenuOpen: Boolean            = false,
 )
 
 class LocateViewModel(
@@ -83,9 +88,9 @@ class LocateViewModel(
     private var webSocket: WebSocket? = null
     private var activeWsUrl: String   = ""
     private var lastAlertMs: Long     = 0L
-    private var trackingJob: Job?     = null   // guards against concurrent startChildTracking() loops
+    private var trackingJob: Job?     = null
 
-    // ── OkHttp client (trust-all SSL, same self-signed cert) ─────────────────
+    // ── OkHttp client (trust-all SSL) ────────────────────────────────────────
     private val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
         override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -102,9 +107,6 @@ class LocateViewModel(
     // ── Local Wi-Fi scan (parent position) ───────────────────────────────────
     private val wifiManager =
         context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-    private val smoothedRssi = mutableMapOf<String, Double>()
-    private var smoothedX: Double? = null
-    private var smoothedY: Double? = null
 
     private val scanReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -119,8 +121,7 @@ class LocateViewModel(
             IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
         )
         viewModelScope.launch {
-            loadFloorPlan()
-            loadKnownAps()
+            loadFloors()
             processParentScan()
             launch { scanLoop() }
         }
@@ -139,47 +140,93 @@ class LocateViewModel(
     }
 
     private fun launchChildTracking() {
-        trackingJob?.cancel()   // kill any previous poll loop before starting a new one
+        trackingJob?.cancel()
         trackingJob = viewModelScope.launch { startChildTracking() }
     }
 
-    // ── Data loading ─────────────────────────────────────────────────────────
+    // ── Floor loading ─────────────────────────────────────────────────────────
 
-    private suspend fun loadFloorPlan() {
+    private suspend fun loadFloors() {
         val settings = settingsRepo.settings.first()
         try {
-            val api = RetrofitClient.get(settings.apiBaseUrl)
-            if (api.getFloorPlan().isSuccessful) {
+            val api    = RetrofitClient.get(settings.apiBaseUrl)
+            val venues = api.getVenues().venues
+            val floors = venues.firstOrNull()?.floorPlans
+                ?.sortedBy { it.floorNumber }
+                ?: emptyList()
+
+            if (floors.isEmpty()) {
                 _state.update {
-                    it.copy(
-                        floorPlanUrl   = "${settings.apiBaseUrl}/api/v1/venue/floor-plan",
-                        floorPlanError = null,
-                    )
+                    it.copy(floorPlanError = "No floor plans found — upload via Web Mapping Tool.")
                 }
-            } else {
-                _state.update {
-                    it.copy(floorPlanUrl = null,
-                        floorPlanError = "No floor plan — upload via Web Mapping Tool.")
-                }
+                return
             }
-        } catch (e: Exception) {
+
+            val firstFloor = floors.first()
             _state.update {
                 it.copy(
-                    floorPlanUrl   = "${settings.apiBaseUrl}/api/v1/venue/floor-plan",
-                    floorPlanError = "Cannot reach backend: ${e.message}",
+                    availableFloors     = floors,
+                    selectedFloorPlanId = firstFloor.id,
+                    selectedFloorNumber = firstFloor.floorNumber,
                 )
+            }
+            loadFloorPlanImage(firstFloor.id, settings.apiBaseUrl)
+            loadKnownAps(firstFloor.id)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load floors: ${e.message}")
+            _state.update {
+                it.copy(floorPlanError = "Cannot reach backend: ${e.message}")
             }
         }
     }
 
-    private suspend fun loadKnownAps() {
+    private suspend fun loadFloorPlanImage(fpId: String, baseUrl: String) {
+        _state.update {
+            it.copy(
+                floorPlanUrl   = "$baseUrl/api/v1/floor-plans/$fpId/image",
+                floorPlanError = null,
+            )
+        }
+    }
+
+    private suspend fun loadKnownAps(fpId: String) {
         try {
             val settings = settingsRepo.settings.first()
             val api      = RetrofitClient.get(settings.apiBaseUrl)
-            val aps      = api.getAps(GATEWAY_API_KEY).accessPoints
+            val aps      = api.getFloorPlanAps(fpId, GATEWAY_API_KEY).accessPoints
             _state.update { it.copy(knownAps = aps) }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to load APs: ${e.message}")
+            Log.w(TAG, "Failed to load APs for floor $fpId: ${e.message}")
+        }
+    }
+
+    // ── Floor switching (parent manually changes the viewed floor) ────────────
+
+    fun toggleFloorMenu() {
+        _state.update { it.copy(floorMenuOpen = !it.floorMenuOpen) }
+    }
+
+    fun dismissFloorMenu() {
+        _state.update { it.copy(floorMenuOpen = false) }
+    }
+
+    fun selectFloor(fp: FloorPlanInfo) {
+        _state.update {
+            it.copy(
+                selectedFloorPlanId = fp.id,
+                selectedFloorNumber = fp.floorNumber,
+                floorMenuOpen       = false,
+                knownAps            = emptyList(),
+                childEstimate       = null,
+                parentEstimate      = null,
+                distanceM           = null,
+            )
+        }
+        LocalizationEngine.resetHistory()
+        viewModelScope.launch {
+            val settings = settingsRepo.settings.first()
+            loadFloorPlanImage(fp.id, settings.apiBaseUrl)
+            loadKnownAps(fp.id)
         }
     }
 
@@ -201,30 +248,14 @@ class LocateViewModel(
             else ScannedAp(bssid = r.BSSID, ssid = r.SSID ?: "", rssi = r.level)
         }
 
-        val activeBssids = rawScan.map { it.bssid.lowercase() }.toSet()
-        smoothedRssi.keys.retainAll(activeBssids)
-
-        val smoothedScan = rawScan.map { ap ->
-            val key  = ap.bssid.lowercase()
-            val prev = smoothedRssi[key] ?: ap.rssi.toDouble()
-            val next = RSSI_ALPHA * ap.rssi + (1.0 - RSSI_ALPHA) * prev
-            smoothedRssi[key] = next
-            ap.copy(rssi = next.toInt())
-        }.filter { it.rssi >= MIN_RSSI_DBM }
+        val filteredScan = rawScan.filter { it.rssi >= MIN_RSSI_DBM }
 
         val knownAps = _state.value.knownAps
         if (knownAps.isEmpty()) return
 
-        val raw = LocalizationEngine.localize(smoothedScan, knownAps) ?: return
-
-        val sx = smoothedX; val sy = smoothedY
-        if (sx == null || sy == null) {
-            smoothedX = raw.xM; smoothedY = raw.yM
-        } else {
-            smoothedX = POS_ALPHA * raw.xM + (1.0 - POS_ALPHA) * sx
-            smoothedY = POS_ALPHA * raw.yM + (1.0 - POS_ALPHA) * sy
-        }
-        val parentEst = raw.copy(xM = smoothedX!!, yM = smoothedY!!)
+        val raw = LocalizationEngine.localize(filteredScan, knownAps) ?: return
+        // LocalizationEngine already applies 3-zone adaptive EMA — no second pass needed.
+        val parentEst = raw
 
         updateDistanceAndAlert(childEst = _state.value.childEstimate, parentEst = parentEst)
         _state.update { it.copy(parentEstimate = parentEst) }
@@ -238,8 +269,6 @@ class LocateViewModel(
 
         var tagId = settings.tagId.trim()
 
-        // If no tag ID is configured, poll the server until one registers.
-        // The tag must send at least one packet before it appears in /api/v1/tags.
         if (tagId.isBlank()) {
             while (tagId.isBlank()) {
                 try {
@@ -296,7 +325,7 @@ class LocateViewModel(
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     try {
                         val msg = gson.fromJson(text, WsPosition::class.java)
-                        if (!msg.biasCalibrated) return   // skip until IMU is ready
+                        if (!msg.biasCalibrated) return
 
                         val childEst = LocationEstimate(
                             xM         = msg.x,
@@ -304,7 +333,57 @@ class LocateViewModel(
                             numAnchors = msg.rssiAnchors ?: 0,
                             avgErrorDb = msg.rssiError   ?: 0.0,
                         )
-                        updateDistanceAndAlert(childEst, _state.value.parentEstimate)
+
+                        val tagFloorFromMsg = msg.floorNumber
+                        val tagFpId        = msg.floorPlanId
+                        val cur            = _state.value
+
+                        // Commit the tag's floor number immediately so the Canvas can gate
+                        // rendering (tagOnThisFloor) independently of floor-switching logic.
+                        _state.update { it.copy(tagFloorNumber = tagFloorFromMsg) }
+
+                        // Auto-follow: switch the viewed floor to the tag's floor unless
+                        // the parent has manually selected a different one.
+                        // Include cur.tagFloorNumber == null so first-message always follows.
+                        val autoFollow = cur.tagFloorNumber == null ||
+                            cur.selectedFloorPlanId == null ||
+                            cur.selectedFloorPlanId == cur.tagFloorPlanId() ||
+                            cur.availableFloors.none { it.id == cur.selectedFloorPlanId }
+
+                        if (autoFollow) {
+                            // Prefer floor_plan_id; fall back to floor_number when id is null.
+                            val targetFp = when {
+                                tagFpId != null       -> cur.availableFloors.find { it.id == tagFpId }
+                                tagFloorFromMsg != null -> cur.availableFloors.find { it.floorNumber == tagFloorFromMsg }
+                                else                  -> null
+                            }
+                            if (targetFp != null && targetFp.id != cur.selectedFloorPlanId) {
+                                _state.update {
+                                    it.copy(
+                                        selectedFloorPlanId = targetFp.id,
+                                        selectedFloorNumber = targetFp.floorNumber,
+                                        knownAps            = emptyList(),
+                                    )
+                                }
+                                LocalizationEngine.resetHistory()
+                                viewModelScope.launch {
+                                    val settings = settingsRepo.settings.first()
+                                    loadFloorPlanImage(targetFp.id, settings.apiBaseUrl)
+                                    loadKnownAps(targetFp.id)
+                                }
+                            }
+                        }
+
+                        // Always store childEstimate — LocateScreen gates dot rendering via
+                        // tagOnThisFloor. Only compute distance when on the same floor.
+                        val sameFloor = tagFloorFromMsg == null ||
+                            _state.value.selectedFloorNumber == null ||
+                            tagFloorFromMsg == _state.value.selectedFloorNumber
+                        if (sameFloor) {
+                            updateDistanceAndAlert(childEst, _state.value.parentEstimate)
+                        } else {
+                            _state.update { it.copy(distanceM = null, alertActive = false) }
+                        }
                         _state.update {
                             it.copy(childEstimate = childEst, wsConnected = true, statusMsg = "Tracking")
                         }
@@ -320,7 +399,7 @@ class LocateViewModel(
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     when (code) {
-                        1000 -> { /* clean close — do nothing */ }
+                        1000 -> { /* clean close */ }
                         4004 -> {
                             _state.update {
                                 it.copy(wsConnected = false,
@@ -406,23 +485,26 @@ class LocateViewModel(
         webSocket?.close(1000, "Manual refresh")
         webSocket   = null
         activeWsUrl = ""
-        smoothedRssi.clear()
-        smoothedX = null
-        smoothedY = null
+        LocalizationEngine.resetHistory()
         _state.update {
             it.copy(
-                childEstimate  = null,
-                parentEstimate = null,
-                distanceM      = null,
-                alertActive    = false,
-                wsConnected    = false,
-                statusMsg      = "Reconnecting…",
+                childEstimate       = null,
+                parentEstimate      = null,
+                distanceM           = null,
+                alertActive         = false,
+                wsConnected         = false,
+                statusMsg           = "Reconnecting…",
+                availableFloors     = emptyList(),
+                selectedFloorPlanId = null,
+                selectedFloorNumber = null,
+                tagFloorNumber      = null,
             )
         }
-        viewModelScope.launch {
-            loadFloorPlan()
-            loadKnownAps()
-        }
-        launchChildTracking()   // cancels any existing poll loop, starts exactly one new one
+        viewModelScope.launch { loadFloors() }
+        launchChildTracking()
     }
 }
+
+// Helper extension to get the floor plan ID that matches the tag's current floor
+private fun LocateUiState.tagFloorPlanId(): String? =
+    tagFloorNumber?.let { n -> availableFloors.find { it.floorNumber == n }?.id }

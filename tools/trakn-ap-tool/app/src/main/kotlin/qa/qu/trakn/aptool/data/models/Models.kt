@@ -5,8 +5,8 @@ import com.google.gson.annotations.SerializedName
 data class AccessPoint(
     val bssid: String = "",
     val ssid: String = "",
-    @SerializedName("rssi_ref") val rssiRef: Double = -40.0,
-    @SerializedName("path_loss_n") val pathLossN: Double = 2.7,
+    @SerializedName("rssi_ref") val rssiRef: Double = -38.0,
+    @SerializedName("path_loss_n") val pathLossN: Double = 2.1,
     val x: Double = 0.0,
     val y: Double = 0.0,
 )

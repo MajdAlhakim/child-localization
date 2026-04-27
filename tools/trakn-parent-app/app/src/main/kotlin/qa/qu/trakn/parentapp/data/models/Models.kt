@@ -39,6 +39,20 @@ data class AppSettings(
     val tagId: String      = "",   // TRAKN-XXXX; auto-fetched from server if blank
 )
 
+data class FloorPlanInfo(
+    val id: String = "",
+    @SerializedName("floor_number") val floorNumber: Int = 0,
+    val name: String = "",
+)
+
+data class VenueInfo(
+    val id: String = "",
+    val name: String = "",
+    @SerializedName("floor_plans") val floorPlans: List<FloorPlanInfo> = emptyList(),
+)
+
+data class VenuesResponse(val venues: List<VenueInfo> = emptyList())
+
 // Tag info returned by GET /api/v1/tags
 data class TagInfo(
     @SerializedName("tag_id") val tagId: String,
@@ -61,4 +75,6 @@ data class WsPosition(
     @SerializedName("rssi_anchors")  val rssiAnchors: Int? = null,
     @SerializedName("rssi_error")    val rssiError: Double? = null,
     val ts: String                   = "",
+    @SerializedName("floor_plan_id") val floorPlanId: String? = null,
+    @SerializedName("floor_number")  val floorNumber: Int? = null,
 )

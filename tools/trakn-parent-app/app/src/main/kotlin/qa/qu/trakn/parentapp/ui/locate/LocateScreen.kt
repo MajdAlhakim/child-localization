@@ -51,11 +51,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import qa.qu.trakn.parentapp.data.models.FloorPlanInfo
 import qa.qu.trakn.parentapp.ui.theme.Blue
 import qa.qu.trakn.parentapp.ui.theme.Green
 import qa.qu.trakn.parentapp.ui.theme.Orange
 import qa.qu.trakn.parentapp.ui.theme.Red
 import qa.qu.trakn.parentapp.ui.theme.Yellow
+
+private fun floorLabel(n: Int): String = when (n) {
+    -1   -> "Basement"
+    0    -> "Ground"
+    1    -> "Floor 1"
+    else -> "Floor $n"
+}
 
 @Composable
 fun LocateScreen(viewModel: LocateViewModel) {
@@ -82,7 +90,11 @@ fun LocateScreen(viewModel: LocateViewModel) {
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
 
         // ── Floor plan + canvas ──────────────────────────────────────────────
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(enabled = state.floorMenuOpen) { viewModel.dismissFloorMenu() },
+        ) {
             if (state.floorPlanUrl != null) {
                 AsyncImage(
                     model = ImageRequest.Builder(context)
@@ -173,6 +185,62 @@ fun LocateScreen(viewModel: LocateViewModel) {
             }
         }
 
+        // ── Floor picker — top-right ─────────────────────────────────────────
+        if (state.availableFloors.isNotEmpty()) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 12.dp),
+            ) {
+                Column(horizontalAlignment = Alignment.End) {
+                    // Trigger pill
+                    val selLabel = state.selectedFloorNumber?.let { floorLabel(it) } ?: "Floor"
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+                            .clickable { viewModel.toggleFloorMenu() }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text       = selLabel,
+                            fontSize   = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = FontFamily.Monospace,
+                            color      = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text     = if (state.floorMenuOpen) "▲" else "▾",
+                            fontSize = 10.sp,
+                            color    = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        )
+                    }
+
+                    // Dropdown menu
+                    AnimatedVisibility(visible = state.floorMenuOpen) {
+                        Column(
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.97f))
+                                .padding(vertical = 6.dp),
+                        ) {
+                            state.availableFloors.forEach { fp ->
+                                FloorMenuItem(
+                                    fp             = fp,
+                                    isSelected     = fp.id == state.selectedFloorPlanId,
+                                    isTagHere      = fp.floorNumber == state.tagFloorNumber,
+                                    onClick        = { viewModel.selectFloor(fp) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Collapsed pill ───────────────────────────────────────────────────
         AnimatedVisibility(
             visible  = !panelExpanded,
@@ -230,6 +298,74 @@ fun LocateScreen(viewModel: LocateViewModel) {
                 onCollapse = { panelExpanded = false },
                 onRefresh  = { viewModel.refresh() },
             )
+        }
+    }
+}
+
+// ── Floor menu item ───────────────────────────────────────────────────────────
+
+@Composable
+private fun FloorMenuItem(
+    fp: FloorPlanInfo,
+    isSelected: Boolean,
+    isTagHere: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                else Color.Transparent
+            )
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+        verticalAlignment     = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Selection indicator
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary
+                        else Color.Transparent
+                    ),
+            )
+            Text(
+                text       = floorLabel(fp.floorNumber),
+                fontSize   = 13.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                fontFamily = FontFamily.Monospace,
+                color      = if (isSelected) MaterialTheme.colorScheme.primary
+                             else MaterialTheme.colorScheme.onSurface,
+            )
+        }
+
+        // Tag location dot — shown when tag is on this floor
+        if (isTagHere) {
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(Blue),
+                )
+                Text(
+                    text     = "tag",
+                    fontSize = 9.sp,
+                    color    = Blue,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
         }
     }
 }
@@ -301,7 +437,34 @@ private fun StatusPanel(
             }
         }
 
-        // ── Distance card (primary info) ──────────────────────────────────────
+        // ── Floor info row ────────────────────────────────────────────────────
+        val tagFloor = state.tagFloorNumber
+        val selFloor = state.selectedFloorNumber
+        if (tagFloor != null || selFloor != null) {
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (selFloor != null) {
+                    InfoChip(
+                        label    = "VIEWING",
+                        value    = floorLabel(selFloor),
+                        color    = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (tagFloor != null) {
+                    InfoChip(
+                        label    = "TAG ON",
+                        value    = floorLabel(tagFloor),
+                        color    = Blue,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        // ── Distance card ─────────────────────────────────────────────────────
         val dist = state.distanceM
         if (dist != null) {
             val (distColor, distLabel) = when {
@@ -369,6 +532,32 @@ private fun StatusPanel(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun InfoChip(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Text(label, fontSize = 9.sp, letterSpacing = 1.sp,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
+        Text(
+            value,
+            fontSize   = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color      = color,
+            fontFamily = FontFamily.Monospace,
+        )
     }
 }
 
