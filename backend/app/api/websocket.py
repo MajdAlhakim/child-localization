@@ -20,6 +20,7 @@ async def position_stream(websocket: WebSocket, tag_id: str):
     failing to receive updates.
     """
     if registry.get(tag_id) is None:
+        await websocket.accept()
         await websocket.close(code=4004, reason=f"Tag {tag_id!r} not registered")
         return
 

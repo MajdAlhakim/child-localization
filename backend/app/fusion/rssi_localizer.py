@@ -203,12 +203,12 @@ def localize(
             y = last[1] + dy * scale
             movement = _MAX_JUMP_M
 
-        if movement < 1.0:
-            alpha = 0.15   # stationary
+        if movement < 0.5:
+            alpha = 0.50   # stationary
         elif movement < 4.0:
-            alpha = 0.60   # walking
+            alpha = 0.85   # walking
         else:
-            alpha = 0.80   # fast movement
+            alpha = 0.95   # fast movement
 
         x = alpha * x + (1.0 - alpha) * last[0]
         y = alpha * y + (1.0 - alpha) * last[1]
