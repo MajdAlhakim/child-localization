@@ -30,8 +30,8 @@ from dataclasses import dataclass
 @dataclass
 class KalmanState:
     x: float          # estimated RSSI (dBm)
-    p: float = 10.0   # error covariance (start uncertain)
-    R: float = 10.0   # measurement noise — raised to suppress stationary jitter
+    p: float = 9.0   # error covariance (start uncertain)
+    R: float = 7.0   # measurement noise — raised to suppress stationary jitter
 
     def update(self, z: float) -> float:
         """Asymmetric Q: trust signal increases (movement), distrust sudden drops (blockage)."""
