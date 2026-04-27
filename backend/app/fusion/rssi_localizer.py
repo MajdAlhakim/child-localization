@@ -54,12 +54,18 @@ class KalmanState:
 _MAX_JUMP_M     = 6.0   # hard cap on position change per scan (metres)
 _MIN_RSSI_DBM   = -90.0 # drop anchors weaker than this — too noisy to help
 
+# ── Calibrated 2.4 GHz path-loss constants (H07-C corridor, tested) ──────────
+# Overrides per-AP DB values — all enterprise APs in H07-C are the same model
+# and the corridor path-loss exponent is environment-wide, not per-AP.
+_RSSI_REF_DBM = -38.0   # RSSI at 1 m for 2.4 GHz
+_PATH_LOSS_N  =  2.1    # corridor path-loss exponent for 2.4 GHz
+
 
 # ── Distance estimation ───────────────────────────────────────────────────────
 
-def estimate_distance(rssi_ref: float, path_loss_n: float, rssi_smoothed: float) -> float:
-    """Log-distance: dist = 10^((rssi_ref − rssi) / (10·n)), clamped [0.3, 80] m."""
-    exponent = (rssi_ref - rssi_smoothed) / (10.0 * path_loss_n)
+def estimate_distance(rssi_smoothed: float) -> float:
+    """Log-distance: dist = 10^((_RSSI_REF_DBM − rssi) / (10·_PATH_LOSS_N)), clamped [0.3, 80] m."""
+    exponent = (_RSSI_REF_DBM - rssi_smoothed) / (10.0 * _PATH_LOSS_N)
     return max(0.3, min(80.0, 10.0 ** exponent))
 
 
@@ -129,7 +135,7 @@ def localize(
             kalman_states[prefix] = KalmanState(x=raw_rssi)
             
         smoothed = kalman_states[prefix].update(raw_rssi)
-        dist = estimate_distance(ap["rssi_ref"], ap["path_loss_n"], smoothed)
+        dist = estimate_distance(smoothed)
         anchors.append((ap, dist, raw_rssi, prefix))
 
     if not anchors:
